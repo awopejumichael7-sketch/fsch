@@ -41,7 +41,7 @@ const firebaseConfig = {
   projectId: "sass-fdea0",
   storageBucket: "sass-fdea0.firebasestorage.app",
   messagingSenderId: "594232822730",
-  appId: "1:594232822730:web:ffa02a88bc33c85aa71d33",
+  appId: "1:594232822730:web:ffa02a88bc33c85aa71d33"
 };
 
 // -------------------------------------------------------------------------
