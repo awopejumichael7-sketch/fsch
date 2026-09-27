@@ -76,14 +76,17 @@ let state = {
 protectPage({
   onReady: (session) => {
     if (session.pending) {
-      showToast("Finishing account setup…", "info");
+      showToast("Your account setup is not complete. Please sign in again.", "error");
+      setTimeout(() => {
+        window.location.href = "login.html";
+      }, 1500);
       return;
     }
+
     state.session = session;
     bootstrap(session);
   },
 });
-
 function bootstrap(session) {
   $("#user-name").textContent = session.name || session.email;
   $("#user-role-badge").textContent = session.role === "admin" || session.role === "parent" ? "Parent" : "Child";
