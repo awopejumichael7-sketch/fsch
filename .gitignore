@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# The Cloud Functions folder is staged automatically by CI (and by the
+# one-time local setup step in README section 3) from functions-index.js /
+# functions-package.json — it doesn't need to live in version control.
+functions/
+
+# Firebase local cache/emulator data
+.firebase/
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
+.runtimeconfig.json
+
+# Environment / secrets — never commit real keys or service accounts
+.env
+.env.*
+*serviceAccount*.json
+*service-account*.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

@@ -1,0 +1,28 @@
+name: Deploy Hosting (live)
+
+# Runs automatically on every push to main — deploys the app shell
+# (HTML/CSS/JS/icons/manifest/service worker) to your live Firebase
+# Hosting URL. Uses only free services: GitHub Actions (free for public
+# repos; a generous free monthly minutes allowance for private repos) and
+# Firebase Hosting's Spark (free) plan.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  deploy_live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to Firebase Hosting (live channel)
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: "${{ secrets.GITHUB_TOKEN }}"
+          firebaseServiceAccount: "${{ secrets.FIREBASE_SERVICE_ACCOUNT }}"
+          projectId: "${{ secrets.FIREBASE_PROJECT_ID }}"
+          channelId: live

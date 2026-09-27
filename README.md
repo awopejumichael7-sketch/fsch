@@ -215,3 +215,128 @@ Before considering a deployment complete, verify:
 This is a self-hosted application — you own the Firebase project and all
 family data within it. There is no external service involved beyond
 Firebase itself.
+
+---
+
+## 11. Install on any device (Progressive Web App)
+
+The app is a fully installable Progressive Web App. Nothing about the
+existing pages, styles, or app logic changed to add this — it is purely
+additive: a manifest, a service worker, an install-prompt helper script,
+one generated icon set, and a handful of new `<head>` tags.
+
+**How families install it:**
+
+| Device | How |
+|---|---|
+| **Android (Chrome/Edge)** | A "Install" banner appears automatically (or use the browser menu → *Install app* / *Add to Home screen*). |
+| **iPhone/iPad (Safari)** | A one-time tip points to it: tap the **Share** icon → **Add to Home Screen**. iOS does not offer an automatic install prompt — this is an Apple/WebKit platform restriction, not something a web app can override. |
+| **Windows/Mac/Linux (Chrome, Edge, Brave)** | An install icon appears in the address bar, or use the same in-app "Install" banner. |
+
+Once installed, the app opens in its own window (no browser address bar),
+gets a home-screen/dock icon, and continues to work offline for
+already-loaded screens thanks to the service worker's app-shell cache —
+live family data itself is kept fresh separately by Firestore's own offline
+persistence (already configured in `firebase-config.js`).
+
+**New files this added** (all free to host on Firebase Hosting's existing
+free tier — they add a negligible ~20 KB total):
+
+```
+manifest.json              Web App Manifest (name, icons, colors, start URL)
+service-worker.js           App-shell caching + offline fallback
+pwa-register.js              Registers the service worker; shows the install banner / iOS tip
+icon-192.png, icon-512.png,
+icon-maskable-512.png,
+apple-touch-icon.png,
+favicon.ico, favicon-16.png,
+favicon-32.png                Generated icon set matching the app's existing navy/blue palette
+```
+
+**The only edits to existing files** were strictly additive lines needed
+because browsers require these tags to exist directly in each page's own
+`<head>` — no manifest link or install prompt can work otherwise:
+- `index.html`, `login.html`, `dashboard.html`: a `<link rel="manifest">`,
+  icon links, `theme-color`/Apple meta tags, and one
+  `<script defer src="pwa-register.js">` before `</body>`.
+- `firebase.json`: one additional header rule so `service-worker.js` and
+  `manifest.json` are never cached stale (installed apps must always see
+  the latest version) — the existing CSS/JS caching rule was left exactly
+  as it was.
+
+No CSS rule, JavaScript function, Firestore query, security rule, or piece
+of visual design from the original build was altered.
+
+---
+
+## 12. Deploying automatically with GitHub
+
+This repo is ready to push to GitHub as-is — the flat file layout does not
+need to change. Three workflows are included under `.github/workflows/`:
+
+| Workflow | Runs on | What it does |
+|---|---|---|
+| `firebase-hosting-merge.yml` | every push to `main` | Deploys the app (HTML/CSS/JS/icons) to your live Hosting URL |
+| `firebase-hosting-pull-request.yml` | every pull request | Publishes a temporary preview link (auto-expires in 7 days) so changes can be reviewed before merging |
+| `firebase-backend-deploy.yml` | push to `main` that touches `functions-index.js`, `functions-package.json`, `firestore.rules`, or `firestore.indexes.json` | Stages the Cloud Functions file into the `functions/` folder Firebase's CLI requires (inside the CI runner only — your repo stays flat) and deploys Firestore rules/indexes + Cloud Functions |
+
+### One-time setup (5 minutes, free)
+
+1. **Push this project to a new GitHub repository** (public or private —
+   both work with everything below).
+2. **Create a Firebase service account key** (this is free — it's an
+   identity, not a paid product):
+   - Firebase Console → ⚙️ **Project settings** → **Service accounts** →
+     **Generate new private key**. This downloads a `.json` file.
+   - ⚠️ Never commit this file to Git — `.gitignore` already excludes any
+     file with "serviceAccount" in its name as a safeguard.
+3. **Add two repository secrets** (GitHub repo → **Settings** → **Secrets
+   and variables** → **Actions** → **New repository secret**):
+   - `FIREBASE_SERVICE_ACCOUNT` — paste the *entire contents* of the JSON
+     file from step 2.
+   - `FIREBASE_PROJECT_ID` — your Firebase project ID (Project settings →
+     General → "Project ID").
+4. **Update `.firebaserc`** — replace `YOUR_FIREBASE_PROJECT_ID` with your
+   real project ID (this just sets the CLI's default project for anyone
+   running `firebase deploy` locally; GitHub Actions uses the secret above
+   regardless).
+5. Push to `main`. The two Hosting workflows will run immediately with no
+   further setup. If you also want Cloud Functions/Firestore rules deployed
+   by GitHub Actions, make sure your project is on the **Blaze plan** first
+   (see the cost note below) — otherwise the `firebase-backend-deploy.yml`
+   run will fail with a clear billing-related error, and you can simply run
+   `firebase deploy --only functions` from your own machine instead.
+
+No other configuration, build step, or paid GitHub feature is required —
+GitHub Actions' free minutes allowance (unlimited for public repositories;
+2,000 minutes/month for private repositories on a free personal account)
+easily covers a project this size.
+
+---
+
+## 13. Cost transparency — what's actually free here
+
+Every service this project uses has a permanent free tier. The one
+exception, noted plainly below, is a Google platform requirement rather
+than a paid feature you're opting into.
+
+| Service | Plan needed | Cost for a typical family |
+|---|---|---|
+| Firebase Hosting | Spark (free) | $0 — 10 GB storage / 360 MB per day transfer included, far more than this app needs |
+| Firebase Authentication | Spark (free) | $0 — unlimited email/password users |
+| Cloud Firestore | Spark (free) | $0 — 1 GiB storage, 50K reads / 20K writes / 20K deletes per day, included free |
+| GitHub + GitHub Actions | Free plan | $0 — unlimited Actions minutes on public repos; a generous free monthly allowance on private repos |
+| The Web App Manifest, service worker, icons | N/A | $0 — static files served by Hosting's existing free tier |
+| **Cloud Functions** (used only for `createFamily`, `generateAccessKey`, `redeemAccessKey`, `revokeAccessKey`) | **Blaze (pay-as-you-go)** | **$0 in practice for normal family use**, but Google requires a billing method on file to enable Cloud Functions at all, even within the free monthly quota |
+
+**About the Blaze-plan requirement:** this isn't a design choice made in
+this project — it's how Google Cloud packages Cloud Functions. The Blaze
+plan itself doesn't cost anything to switch to; you're simply asked to add
+a payment method, and you are only ever charged for usage **above** the
+free monthly quota (2,000,000 invocations, 400,000 GB-seconds, 200,000
+CPU-seconds, and 5 GB of outbound networking, every month, forever). A
+family generating and redeeming a handful of access keys and occasionally
+creating a family account will not come close to that ceiling. To keep
+peace of mind, you can additionally set a **Budget Alert** for free
+(Google Cloud Console → Billing → Budgets & alerts) so you're notified —
+at no cost — if usage ever approaches a threshold you choose.
