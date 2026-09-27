@@ -36,12 +36,12 @@ import { getFunctions } from "https://www.gstatic.com/firebasejs/10.13.0/firebas
 // 1. YOUR FIREBASE WEB CONFIG — replace with your own project's values
 // -------------------------------------------------------------------------
 const firebaseConfig = {
-  apiKey: "YOUR_FIREBASE_API_KEY",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID",
+ apiKey: "AIzaSyASpQ_H_wDS-0yHdOlF0PQsfNz2qagfBtk",
+  authDomain: "sass-fdea0.firebaseapp.com",
+  projectId: "sass-fdea0",
+  storageBucket: "sass-fdea0.firebasestorage.app",
+  messagingSenderId: "594232822730",
+  appId: "1:594232822730:web:ffa02a88bc33c85aa71d33",
 };
 
 // -------------------------------------------------------------------------
