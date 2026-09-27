@@ -1,0 +1,168 @@
+rules_version = '2';
+
+/**
+ * firestore.rules — Family Productivity Hub
+ * ---------------------------------------------------------------------
+ * AUTHORIZATION MODEL (Section 33, 54):
+ *   1. Every request must be authenticated.
+ *   2. A user's role and familyId are read from their OWN `users/{uid}`
+ *      document — a document this ruleset makes IMPOSSIBLE for the client
+ *      to write. It is only ever written by Cloud Functions using the
+ *      Admin SDK (functions-index.js), which bypasses these rules by
+ *      design. This is what stops "role: admin" client-side tampering.
+ *   3. Every family-scoped read/write re-checks that the caller's own
+ *      familyId matches the {familyId} in the document path — a user's
+ *      familyId is NEVER taken from client-supplied request data.
+ *   4. Children get narrower read/write access than parents/admins.
+ * ---------------------------------------------------------------------
+ */
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---- Helpers -----------------------------------------------------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function myProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function myFamilyId() {
+      return myProfile().familyId;
+    }
+
+    function myRole() {
+      return myProfile().role;
+    }
+
+    function myMemberId() {
+      return myProfile().memberId;
+    }
+
+    function isParentOrAdmin() {
+      return isSignedIn() && (myRole() == 'admin' || myRole() == 'parent');
+    }
+
+    function belongsToFamily(familyId) {
+      return isSignedIn() && myFamilyId() == familyId;
+    }
+
+    // ---- users/{uid} ---------------------------------------------------
+    // A user may READ only their own profile. NO client writes are ever
+    // allowed — role and familyId are exclusively set by Cloud Functions
+    // (createFamily / redeemAccessKey) via the Admin SDK.
+    match /users/{uid} {
+      allow read: if isSignedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // ---- accessKeyIndex/{hashedKey} -------------------------------------
+    // Server-only lookup table used by redeemAccessKey / generateAccessKey.
+    // No client, of any role, may ever read or write this collection.
+    match /accessKeyIndex/{hashedKey} {
+      allow read, write: if false;
+    }
+
+    // ---- families/{familyId} --------------------------------------------
+    match /families/{familyId} {
+      allow read: if belongsToFamily(familyId);
+      allow create: if false; // only createFamily() Cloud Function creates families
+      allow update: if belongsToFamily(familyId) && isParentOrAdmin();
+      allow delete: if false;
+
+      // ---- members/{memberId} (Section 9) -------------------------------
+      match /members/{memberId} {
+        allow read: if belongsToFamily(familyId);
+        allow create, update: if belongsToFamily(familyId) && isParentOrAdmin();
+        allow delete: if false; // soft-delete only, via update({active:false})
+      }
+
+      // ---- tasks/{taskId} (Sections 10, 11, 15, 20) ----------------------
+      match /tasks/{taskId} {
+        allow read: if belongsToFamily(familyId) &&
+          (isParentOrAdmin() || resource.data.assignedTo == myMemberId());
+
+        allow create: if belongsToFamily(familyId) && isParentOrAdmin() &&
+          request.resource.data.familyId == familyId &&
+          request.resource.data.assignedTo is string;
+
+        // Parents/admins may edit any field. Children may ONLY toggle their
+        // own task's completion-related fields — never assignedTo, title,
+        // date, or times (Section 15: cannot affect another child's task,
+        // and cannot silently reassign work to themselves).
+        allow update: if belongsToFamily(familyId) && (
+          isParentOrAdmin() ||
+          (
+            resource.data.assignedTo == myMemberId() &&
+            request.resource.data.assignedTo == resource.data.assignedTo &&
+            request.resource.data.title == resource.data.title &&
+            request.resource.data.date == resource.data.date &&
+            request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['completed', 'status', 'completedAt', 'updatedAt', 'updatedBy'])
+          )
+        );
+
+        allow delete: if false; // soft-delete only (archived: true)
+      }
+
+      // ---- goals/{goalId} (Section 24) -----------------------------------
+      match /goals/{goalId} {
+        allow read: if belongsToFamily(familyId) &&
+          (isParentOrAdmin() || resource.data.assignedTo == myMemberId());
+        allow create: if belongsToFamily(familyId) && isParentOrAdmin();
+        allow update: if belongsToFamily(familyId) && (
+          isParentOrAdmin() ||
+          (
+            resource.data.assignedTo == myMemberId() &&
+            request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['progress', 'status', 'updatedAt'])
+          )
+        );
+        allow delete: if false;
+      }
+
+      // ---- habits/{habitId} (Section 25) ---------------------------------
+      match /habits/{habitId} {
+        allow read: if belongsToFamily(familyId) &&
+          (isParentOrAdmin() || resource.data.assignedTo == myMemberId());
+        allow create: if belongsToFamily(familyId) && isParentOrAdmin();
+        allow update: if belongsToFamily(familyId) && (
+          isParentOrAdmin() ||
+          (
+            resource.data.assignedTo == myMemberId() &&
+            request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['completedDates', 'currentStreak', 'longestStreak', 'updatedAt'])
+          )
+        );
+        allow delete: if false;
+      }
+
+      // ---- settings/app (Sections 18, 26, 40-41) --------------------------
+      match /settings/{settingId} {
+        allow read: if belongsToFamily(familyId);
+        allow write: if belongsToFamily(familyId) && isParentOrAdmin();
+      }
+
+      // ---- activityLogs/{logId} (Section 32) -------------------------------
+      // Any signed-in family member may WRITE their own action (create-only,
+      // never edit/delete history), but only parents/admins may read the
+      // full family log.
+      match /activityLogs/{logId} {
+        allow read: if belongsToFamily(familyId) && isParentOrAdmin();
+        allow create: if belongsToFamily(familyId) &&
+          request.resource.data.userId == request.auth.uid &&
+          request.resource.data.familyId == familyId;
+        allow update, delete: if false;
+      }
+
+      // ---- accessKeys/{keyId} (Sections 5, 34, 53) --------------------------
+      // Display/management records only (masked key, never plaintext).
+      // All writes happen exclusively through Cloud Functions.
+      match /accessKeys/{keyId} {
+        allow read: if belongsToFamily(familyId) && isParentOrAdmin();
+        allow write: if false;
+      }
+    }
+  }
+}

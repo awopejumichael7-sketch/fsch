@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<!-- PWA installability (added; nothing above/below this block was changed) -->
+<meta name="theme-color" content="#101A2C" />
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
+<link rel="shortcut icon" href="favicon.ico" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Family Hub" />
+<title>Family Productivity Hub</title>
+<meta name="description" content="One family. Individual responsibilities. One central dashboard." />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css" />
+<link rel="stylesheet" href="responsive.css" />
+</head>
+<body class="auth-body">
+
+  <div class="auth-shell">
+    <div class="auth-shell__brand">
+      <div class="brand-mark">FPH</div>
+      <h1>Family Productivity Hub</h1>
+      <p class="subtitle">One Family • Individual Responsibilities • One Central Dashboard</p>
+      <ul class="brand-points">
+        <li>Assign every task to the right person, every time</li>
+        <li>Daily, weekly and monthly planners the whole family can see</li>
+        <li>Goals, habits and reports for each child — and the family as a whole</li>
+      </ul>
+    </div>
+
+    <div class="auth-shell__panel">
+      <div class="tabs" role="tablist">
+        <button class="tab tab--active" id="tab-create" role="tab" aria-selected="true">Create a Family</button>
+        <button class="tab" id="tab-join" role="tab" aria-selected="false">Join a Family</button>
+      </div>
+
+      <!-- CREATE FAMILY (Section 51: parent becomes admin via secure Cloud Function) -->
+      <form id="parent-signup-form" class="auth-form" novalidate>
+        <label>Your name
+          <input type="text" name="name" required autocomplete="name" />
+        </label>
+        <label>Family name
+          <input type="text" name="familyName" placeholder="e.g. The Johnsons" required />
+        </label>
+        <label>Email
+          <input type="email" name="email" required autocomplete="email" />
+        </label>
+        <label>Password
+          <input type="password" name="password" minlength="6" required autocomplete="new-password" />
+        </label>
+        <button type="submit" class="btn btn--primary btn--block">Create Family &amp; Continue</button>
+        <p class="fineprint">You'll become the Parent/Admin for your new family and can invite others with a secure access key.</p>
+      </form>
+
+      <!-- JOIN FAMILY (Section 52: redeem an access key via secure Cloud Function) -->
+      <form id="join-family-form" class="auth-form auth-form--hidden" novalidate>
+        <label>Access key
+          <input type="text" name="accessKey" placeholder="FAM-7K2P-91XZ" required style="text-transform:uppercase" />
+        </label>
+        <label>Your name
+          <input type="text" name="name" required />
+        </label>
+        <fieldset class="radio-fieldset">
+          <legend>Account</legend>
+          <label class="radio-label"><input type="radio" name="account-mode" value="new" checked /> I'm new here</label>
+          <label class="radio-label"><input type="radio" name="account-mode" value="existing" /> I already have an account</label>
+        </fieldset>
+        <label>Email
+          <input type="email" name="email" required />
+        </label>
+        <label>Password
+          <input type="password" name="password" minlength="6" required />
+        </label>
+        <button type="submit" class="btn btn--primary btn--block">Join Family</button>
+        <p class="fineprint">Ask your parent for the access key. It's single-use or limited-use and may expire.</p>
+      </form>
+
+      <p class="auth-switch">Already have an account? <a href="login.html">Sign in</a></p>
+    </div>
+  </div>
+
+  <script type="module">
+    import { bindAuthForms } from "./auth.js";
+    bindAuthForms();
+
+    const tabCreate = document.getElementById("tab-create");
+    const tabJoin = document.getElementById("tab-join");
+    const formCreate = document.getElementById("parent-signup-form");
+    const formJoin = document.getElementById("join-family-form");
+
+    function showCreate() {
+      tabCreate.classList.add("tab--active"); tabCreate.setAttribute("aria-selected", "true");
+      tabJoin.classList.remove("tab--active"); tabJoin.setAttribute("aria-selected", "false");
+      formCreate.classList.remove("auth-form--hidden");
+      formJoin.classList.add("auth-form--hidden");
+    }
+    function showJoin() {
+      tabJoin.classList.add("tab--active"); tabJoin.setAttribute("aria-selected", "true");
+      tabCreate.classList.remove("tab--active"); tabCreate.setAttribute("aria-selected", "false");
+      formJoin.classList.remove("auth-form--hidden");
+      formCreate.classList.add("auth-form--hidden");
+    }
+    tabCreate.addEventListener("click", showCreate);
+    tabJoin.addEventListener("click", showJoin);
+  </script>
+  <script defer src="pwa-register.js"></script>
+</body>
+</html>

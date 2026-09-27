@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<!-- PWA installability (added; nothing above/below this block was changed) -->
+<meta name="theme-color" content="#101A2C" />
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
+<link rel="shortcut icon" href="favicon.ico" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Family Hub" />
+<title>Dashboard · Family Productivity Hub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css" />
+<link rel="stylesheet" href="dashboard.css" />
+<link rel="stylesheet" href="responsive.css" />
+</head>
+<body>
+
+<div id="connection-indicator" class="connection-indicator"></div>
+
+<div class="app-shell">
+
+  <!-- ============ SIDEBAR (Section 39 desktop/tablet nav) ============ -->
+  <aside id="sidebar" class="sidebar">
+    <div class="sidebar__brand">
+      <span class="brand-mark brand-mark--sm">FPH</span>
+      <span class="sidebar__brand-name">Family Productivity Hub</span>
+    </div>
+
+    <nav class="sidebar__nav">
+      <a href="#" class="nav-link nav-link--active" data-view="dashboard">🏠 Dashboard</a>
+      <a href="#" class="nav-link" data-view="daily">📆 Daily Planner</a>
+      <a href="#" class="nav-link" data-view="weekly">🗓️ Weekly Planner</a>
+      <a href="#" class="nav-link" data-view="monthly">📅 Monthly Planner</a>
+      <a href="#" class="nav-link" data-view="goals">🎯 Goals</a>
+      <a href="#" class="nav-link" data-view="habits">🔁 Habits</a>
+      <a href="#" class="nav-link" data-view="reports">📊 Reports</a>
+      <a href="#" class="nav-link parent-only" data-view="family">👪 Family</a>
+      <a href="#" class="nav-link parent-only" data-view="access-keys">🔑 Access Keys</a>
+      <a href="#" class="nav-link" data-view="settings">⚙️ Settings</a>
+    </nav>
+
+    <div class="sidebar__footer">
+      <div class="user-chip">
+        <span id="user-name">—</span>
+        <span id="user-role-badge" class="pill pill--blue">—</span>
+      </div>
+      <button id="logout-btn" class="btn btn--ghost btn--block btn--sm">Log out</button>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <main class="main">
+    <header class="topbar">
+      <button id="mobile-menu-btn" class="icon-btn topbar__menu-btn" aria-label="Open menu">☰</button>
+      <div class="topbar__search">
+        <input id="global-search-input" type="search" placeholder="Search tasks, categories, family members…" aria-label="Search" />
+      </div>
+      <div class="topbar__filters">
+        <select id="family-filter-select" class="member-select member-select--with-all" aria-label="Filter by family member"></select>
+        <select id="category-filter-select" aria-label="Filter by category">
+          <option value="all">All Categories</option>
+        </select>
+        <select id="priority-filter-select" aria-label="Filter by priority">
+          <option value="all">All Priorities</option>
+          <option value="High">High</option>
+          <option value="Medium">Medium</option>
+          <option value="Low">Low</option>
+        </select>
+        <select id="status-filter-select" aria-label="Filter by status">
+          <option value="all">All Statuses</option>
+          <option value="not-started">Not Started</option>
+          <option value="in-progress">In Progress</option>
+          <option value="completed">Completed</option>
+          <option value="overdue">Overdue</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+      </div>
+      <button id="quick-add-task-btn" class="btn btn--primary btn--sm">+ Add Task</button>
+    </header>
+
+    <!-- ============ DASHBOARD VIEW (Section 21) ============ -->
+    <section id="view-dashboard" class="view">
+      <h2>Good day, <span id="greeting-name">there</span></h2>
+      <p class="section-subtitle">Family Productivity Hub</p>
+
+      <div class="kpi-grid">
+        <div class="kpi-card"><span class="kpi-card__value" id="kpi-total">0</span><span class="kpi-card__label">Total Tasks</span></div>
+        <div class="kpi-card kpi-card--green"><span class="kpi-card__value" id="kpi-completed">0</span><span class="kpi-card__label">Completed</span></div>
+        <div class="kpi-card kpi-card--amber"><span class="kpi-card__value" id="kpi-pending">0</span><span class="kpi-card__label">Pending</span></div>
+        <div class="kpi-card kpi-card--red"><span class="kpi-card__value" id="kpi-overdue">0</span><span class="kpi-card__label">Overdue</span></div>
+        <div class="kpi-card kpi-card--blue"><span class="kpi-card__value" id="kpi-rate">0%</span><span class="kpi-card__label">Completion Rate</span></div>
+      </div>
+
+      <div class="quick-actions">
+        <button id="quick-add-goal-btn" class="btn btn--outline btn--sm">+ Add Goal</button>
+        <button id="quick-add-habit-btn" class="btn btn--outline btn--sm">+ Add Habit</button>
+        <button id="quick-add-member-btn" class="btn btn--outline btn--sm parent-only">+ Add Family Member</button>
+        <button id="enable-reminders-btn" class="btn btn--outline btn--sm">🔔 Enable Reminders</button>
+      </div>
+
+      <div class="dashboard-columns">
+        <div class="panel">
+          <h3>Today's Tasks</h3>
+          <div id="dashboard-today-list" class="task-list"></div>
+        </div>
+        <div class="panel">
+          <h3>Upcoming Tasks</h3>
+          <div id="dashboard-upcoming-list" class="task-list"></div>
+        </div>
+        <div class="panel">
+          <h3>Overdue Tasks</h3>
+          <div id="dashboard-overdue-list" class="task-list"></div>
+        </div>
+      </div>
+
+      <div class="panel parent-only">
+        <h3>Family Progress</h3>
+        <div id="family-progress-grid" class="member-grid"></div>
+      </div>
+    </section>
+
+    <!-- ============ DAILY PLANNER (Section 12) ============ -->
+    <section id="view-daily" class="view view--hidden">
+      <div class="planner-header">
+        <button id="daily-prev" class="icon-btn">←</button>
+        <div>
+          <h2>Today</h2>
+          <p id="daily-date-label" class="section-subtitle"></p>
+        </div>
+        <button id="daily-next" class="icon-btn">→</button>
+        <button id="daily-today" class="btn btn--ghost btn--sm">Today</button>
+      </div>
+      <div id="daily-task-list" class="task-list"></div>
+    </section>
+
+    <!-- ============ WEEKLY PLANNER (Section 13) ============ -->
+    <section id="view-weekly" class="view view--hidden">
+      <div class="planner-header">
+        <button id="weekly-prev" class="icon-btn">←</button>
+        <div>
+          <h2>Weekly Planner</h2>
+          <p id="weekly-range-label" class="section-subtitle"></p>
+        </div>
+        <button id="weekly-next" class="icon-btn">→</button>
+        <button id="weekly-current" class="btn btn--ghost btn--sm">This Week</button>
+      </div>
+      <div id="weekly-grid" class="weekly-grid"></div>
+    </section>
+
+    <!-- ============ MONTHLY PLANNER (Section 14) ============ -->
+    <section id="view-monthly" class="view view--hidden">
+      <div class="planner-header">
+        <button id="monthly-prev" class="icon-btn">←</button>
+        <h2 id="monthly-label"></h2>
+        <button id="monthly-next" class="icon-btn">→</button>
+      </div>
+      <div class="monthly-weekdays">
+        <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
+      </div>
+      <div id="monthly-grid" class="monthly-grid"></div>
+    </section>
+
+    <!-- ============ GOALS (Section 24) ============ -->
+    <section id="view-goals" class="view view--hidden">
+      <div class="view-header"><h2>Goals</h2><button id="fab-add-goal" class="btn btn--primary btn--sm" onclick="document.getElementById('quick-add-goal-btn').click()">+ Add Goal</button></div>
+      <div id="goals-list" class="card-grid"></div>
+    </section>
+
+    <!-- ============ HABITS (Section 25) ============ -->
+    <section id="view-habits" class="view view--hidden">
+      <div class="view-header">
+        <h2>Habits</h2>
+        <span class="pill pill--green">Points this period: <strong id="points-total">0</strong></span>
+        <button class="btn btn--primary btn--sm" onclick="document.getElementById('quick-add-habit-btn').click()">+ Add Habit</button>
+      </div>
+      <div id="habits-list" class="card-grid"></div>
+    </section>
+
+    <!-- ============ REPORTS (Sections 27-28, 32, 59) ============ -->
+    <section id="view-reports" class="view view--hidden">
+      <h2>Reports</h2>
+      <div class="kpi-grid kpi-grid--compact">
+        <div class="kpi-card"><span class="kpi-card__value" id="report-total">0</span><span class="kpi-card__label">Tasks (This Week)</span></div>
+        <div class="kpi-card kpi-card--green"><span class="kpi-card__value" id="report-completed">0</span><span class="kpi-card__label">Completed</span></div>
+        <div class="kpi-card kpi-card--amber"><span class="kpi-card__value" id="report-pending">0</span><span class="kpi-card__label">Pending</span></div>
+        <div class="kpi-card kpi-card--blue"><span class="kpi-card__value" id="report-rate">0%</span><span class="kpi-card__label">Completion %</span></div>
+      </div>
+      <div class="dashboard-columns">
+        <div class="panel">
+          <h3>Category Breakdown</h3>
+          <ul id="report-category-breakdown" class="plain-list"></ul>
+        </div>
+        <div class="panel parent-only">
+          <h3>Activity Log</h3>
+          <ul id="activity-log-list" class="plain-list plain-list--scroll"></ul>
+        </div>
+      </div>
+      <div class="quick-actions">
+        <button id="export-csv-btn" class="btn btn--outline btn--sm">⬇ Export CSV</button>
+        <button id="print-report-btn" class="btn btn--outline btn--sm">🖨 Print Report</button>
+      </div>
+    </section>
+
+    <!-- ============ FAMILY (Section 9) — parents only ============ -->
+    <section id="view-family" class="view view--hidden parent-only">
+      <div class="view-header"><h2>Family Members</h2><button class="btn btn--primary btn--sm" onclick="document.getElementById('quick-add-member-btn').click()">+ Add Family Member</button></div>
+      <div id="members-full-list" class="member-grid"></div>
+    </section>
+
+    <!-- ============ ACCESS KEYS (Sections 5, 34, 53) — parents only ============ -->
+    <section id="view-access-keys" class="view view--hidden parent-only">
+      <h2>Access Keys</h2>
+      <form id="generate-key-form" class="inline-form">
+        <label>Role
+          <select name="role"><option value="child">Child</option><option value="parent">Parent</option></select>
+        </label>
+        <label>Expires in (days)
+          <input type="number" name="expiresInDays" value="7" min="1" max="365" />
+        </label>
+        <label>Max uses
+          <input type="number" name="maxUses" value="1" min="1" max="50" />
+        </label>
+        <button type="submit" class="btn btn--primary btn--sm">Generate Key</button>
+      </form>
+      <div id="access-keys-table" class="table-wrap"></div>
+    </section>
+
+    <!-- ============ SETTINGS (Sections 18, 26, 40-42) ============ -->
+    <section id="view-settings" class="view view--hidden">
+      <h2>Settings</h2>
+
+      <div class="panel">
+        <h3>Appearance</h3>
+        <label>Theme
+          <select id="theme-select">
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+            <option value="system">System Default</option>
+          </select>
+        </label>
+        <form id="palette-form" class="palette-form parent-only">
+          <label>Navy <input type="color" name="navy" value="#101A2C" /></label>
+          <label>Blue <input type="color" name="blue" value="#2F6FED" /></label>
+          <label>Green <input type="color" name="green" value="#1FA97C" /></label>
+          <label>Red <input type="color" name="red" value="#E4574C" /></label>
+          <label>Amber <input type="color" name="amber" value="#E8A33D" /></label>
+          <button type="submit" class="btn btn--outline btn--sm">Save Palette</button>
+        </form>
+      </div>
+
+      <div class="panel parent-only">
+        <h3>Productivity Points</h3>
+        <label class="switch-label"><input type="checkbox" id="points-toggle" /> Enable productivity points</label>
+      </div>
+
+      <div class="panel parent-only">
+        <h3>Task Categories</h3>
+        <div id="categories-list" class="chip-row"></div>
+        <form id="add-category-form" class="inline-form">
+          <input type="text" name="newCategory" placeholder="New category name" />
+          <button type="submit" class="btn btn--outline btn--sm">Add Category</button>
+        </form>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ============ MOBILE BOTTOM NAV (Section 39) ============ -->
+<nav class="bottom-nav">
+  <a href="#" class="bottom-nav__link nav-link" data-view="dashboard">🏠<span>Home</span></a>
+  <a href="#" class="bottom-nav__link nav-link" data-view="daily">📆<span>Tasks</span></a>
+  <a href="#" class="bottom-nav__link nav-link" data-view="monthly">📅<span>Calendar</span></a>
+  <a href="#" class="bottom-nav__link nav-link" data-view="goals">🎯<span>Goals</span></a>
+  <a href="#" class="bottom-nav__link nav-link" data-view="reports">📊<span>Reports</span></a>
+</nav>
+<button id="fab-add-task" class="fab" aria-label="Add task">+</button>
+
+<!-- ============ MODALS ============ -->
+
+<!-- Quick Add / Edit Task (Section 56-57) -->
+<div id="task-modal" class="modal-overlay">
+  <div class="modal">
+    <h3>Add New Task</h3>
+    <form id="task-modal-form">
+      <label>Assign To
+        <select name="assignedTo" class="member-select" required></select>
+      </label>
+      <label>Task <input type="text" name="title" required /></label>
+      <label>Description <textarea name="description" rows="2"></textarea></label>
+      <div class="form-row">
+        <label>Date <input type="date" name="date" required /></label>
+        <label>Start Time <input type="time" name="startTime" required /></label>
+        <label>End Time <input type="time" name="endTime" required /></label>
+      </div>
+      <div class="form-row">
+        <label>Category
+          <select name="category">
+            <option>Spiritual</option><option>Education</option><option>Homework</option>
+            <option>Reading</option><option>Work</option><option>Household</option>
+            <option>Chores</option><option>Health/Fitness</option><option>Personal Development</option>
+            <option>Family</option><option>Finance</option><option>Appointment</option>
+            <option>Rest</option><option>Other</option>
+          </select>
+        </label>
+        <label>Priority
+          <select name="priority"><option>High</option><option selected>Medium</option><option>Low</option></select>
+        </label>
+      </div>
+      <label>Recurring?
+        <select name="recurring">
+          <option value="none">Does not repeat</option>
+          <option value="daily">Daily</option>
+          <option value="weekdays">Weekdays</option>
+          <option value="weekly">Weekly</option>
+          <option value="monthly">Monthly</option>
+        </select>
+      </label>
+      <label>Notes <textarea name="notes" rows="2"></textarea></label>
+      <div class="modal__actions">
+        <button type="button" class="btn btn--ghost" data-close-modal="task-modal">Cancel</button>
+        <button type="submit" class="btn btn--primary">Save Task</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Add Goal -->
+<div id="goal-modal" class="modal-overlay">
+  <div class="modal">
+    <h3>Add New Goal</h3>
+    <form id="goal-modal-form">
+      <label>Assign To <select name="assignedTo" class="member-select" required></select></label>
+      <label>Goal Title <input type="text" name="title" required /></label>
+      <label>Description <textarea name="description" rows="2"></textarea></label>
+      <label>Category
+        <select name="category">
+          <option>Personal Development</option><option>Education</option><option>Health/Fitness</option>
+          <option>Spiritual</option><option>Family</option><option>Finance</option><option>Other</option>
+        </select>
+      </label>
+      <label>Target Date <input type="date" name="targetDate" /></label>
+      <div class="modal__actions">
+        <button type="button" class="btn btn--ghost" data-close-modal="goal-modal">Cancel</button>
+        <button type="submit" class="btn btn--primary">Save Goal</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Add Habit -->
+<div id="habit-modal" class="modal-overlay">
+  <div class="modal">
+    <h3>Add New Habit</h3>
+    <form id="habit-modal-form">
+      <label>Assign To <select name="assignedTo" class="member-select" required></select></label>
+      <label>Habit Name <input type="text" name="name" required /></label>
+      <label>Frequency
+        <select name="frequency"><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="custom">Custom</option></select>
+      </label>
+      <div class="modal__actions">
+        <button type="button" class="btn btn--ghost" data-close-modal="habit-modal">Cancel</button>
+        <button type="submit" class="btn btn--primary">Save Habit</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Add / Manage Family Member -->
+<div id="member-modal" class="modal-overlay">
+  <div class="modal">
+    <h3>Family Member</h3>
+    <form id="member-modal-form">
+      <label>Name <input type="text" name="name" required /></label>
+      <label>Role <select name="role"><option value="child">Child</option><option value="parent">Parent</option></select></label>
+      <label>Age (optional) <input type="number" name="age" min="0" max="120" /></label>
+      <label>Email (optional) <input type="email" name="email" /></label>
+      <div class="modal__actions">
+        <button type="button" class="btn btn--ghost" data-close-modal="member-modal">Cancel</button>
+        <button type="submit" class="btn btn--primary">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script type="module" src="dashboard.js"></script>
+<script defer src="pwa-register.js"></script>
+</body>
+</html>
