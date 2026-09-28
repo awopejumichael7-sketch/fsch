@@ -384,7 +384,7 @@ function renderAccessKeysView() {
     onCopy: (key) => { navigator.clipboard.writeText(key); showToast("Access key copied to clipboard.", "success"); },
     onRevoke: async (key) => {
       try {
-        await revokeAccessKey(key.id);
+        await revokeAccessKey(state.session, key.id);
         showToast("Access key revoked.", "success");
       } catch (err) {
         showToast(friendlyError(err), "error");
@@ -397,7 +397,7 @@ $("#generate-key-form")?.addEventListener("submit", async (e) => {
   e.preventDefault();
   const form = e.target;
   try {
-    const result = await generateAccessKey({
+    const result = await generateAccessKey(state.session, {
       role: form.role.value,
       expiresInDays: Number(form.expiresInDays.value) || 7,
       maxUses: Number(form.maxUses.value) || 1,

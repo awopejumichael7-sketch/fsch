@@ -9,11 +9,13 @@
  * they are NOT secrets. Real protection of your data comes from:
  *   1. Firebase Authentication (who is signed in)
  *   2. Firestore Security Rules (firestore.rules — what they may read/write)
- *   3. Cloud Functions (functions-index.js — sensitive server-side logic)
+ * Role assignment and access-key redemption are enforced entirely by
+ * firestore.rules + the client code in auth.js/family.js — no Cloud
+ * Functions and no Blaze (paid) plan are required. See README §14 for the
+ * full explanation and the trade-offs of this approach.
  *
- * NEVER put a Firebase Admin SDK service-account key, a Cloud Functions
- * secret, or any "admin password" in this file or anywhere in the
- * frontend. Those belong only on the server (Cloud Functions runtime).
+ * NEVER put a Firebase Admin SDK service-account key or any "admin
+ * password" in this file or anywhere in the frontend.
  *
  * Replace the placeholder values with the config from:
  * Firebase Console → Project Settings → General → Your apps → Web app
@@ -30,18 +32,26 @@ import {
   getFirestore,
   enableIndexedDbPersistence,
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
-import { getFunctions } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-functions.js";
+
+// NOTE ON CLOUD FUNCTIONS (intentionally not initialized here):
+// Family setup and access-key security now run entirely on Firestore
+// Security Rules + client code (see auth.js and family.js), so this app
+// works on Firebase's free "Spark" plan with no billing account required.
+// Cloud Functions require the paid "Blaze" plan even for free-tier usage,
+// so the Functions SDK is intentionally not loaded. functions-index.js and
+// functions-package.json remain in this project only as an optional
+// upgrade path for anyone who later switches to Blaze — see README §14.
 
 // -------------------------------------------------------------------------
 // 1. YOUR FIREBASE WEB CONFIG — replace with your own project's values
 // -------------------------------------------------------------------------
 const firebaseConfig = {
- apiKey: "AIzaSyASpQ_H_wDS-0yHdOlF0PQsfNz2qagfBtk",
-  authDomain: "sass-fdea0.firebaseapp.com",
-  projectId: "sass-fdea0",
-  storageBucket: "sass-fdea0.firebasestorage.app",
-  messagingSenderId: "594232822730",
-  appId: "1:594232822730:web:ffa02a88bc33c85aa71d33"
+  apiKey: "YOUR_FIREBASE_API_KEY",
+  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT_ID.appspot.com",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId: "YOUR_APP_ID",
 };
 
 // -------------------------------------------------------------------------
@@ -50,7 +60,6 @@ const firebaseConfig = {
 export const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
-export const functionsInstance = getFunctions(app);
 
 // Keep users signed in across tabs/reloads (session persistence requirement).
 setPersistence(auth, browserLocalPersistence).catch((err) => {
@@ -68,14 +77,3 @@ enableIndexedDbPersistence(db).catch((err) => {
     console.warn("Offline persistence not supported in this browser.");
   }
 });
-
-// -------------------------------------------------------------------------
-// 3. Cloud Function callable names (kept in one place to avoid typos)
-// -------------------------------------------------------------------------
-export const FN = {
-  CREATE_FAMILY: "createFamily",
-  GENERATE_ACCESS_KEY: "generateAccessKey",
-  REDEEM_ACCESS_KEY: "redeemAccessKey",
-  REVOKE_ACCESS_KEY: "revokeAccessKey",
-  DEACTIVATE_MEMBER: "deactivateMember",
-};

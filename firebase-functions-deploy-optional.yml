@@ -1,0 +1,48 @@
+name: (Optional) Deploy Cloud Functions — requires Blaze plan
+
+# This workflow is NOT wired to run automatically on push. It exists only
+# for anyone who later chooses to upgrade their Firebase project to the
+# paid Blaze plan and wants the additional server-side hardening in
+# functions-index.js layered on top of the free, rules-only security model
+# this app uses by default (see firestore.rules and README section 14).
+#
+# To run it: GitHub repo -> Actions tab -> "(Optional) Deploy Cloud
+# Functions" -> Run workflow. If your project is still on the free Spark
+# plan, this will fail with a clear Firebase billing error — that's
+# expected and does not affect any of the app's other functionality.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  deploy_functions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Stage Cloud Functions into the folder Firebase's CLI requires
+        run: |
+          mkdir -p functions
+          cp functions-index.js functions/index.js
+          cp functions-package.json functions/package.json
+
+      - name: Install Cloud Functions dependencies
+        working-directory: functions
+        run: npm install
+
+      - name: Authenticate to Google Cloud / Firebase
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: "${{ secrets.FIREBASE_SERVICE_ACCOUNT }}"
+
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools
+
+      - name: Deploy Cloud Functions
+        run: firebase deploy --only functions --project "${{ secrets.FIREBASE_PROJECT_ID }}" --non-interactive

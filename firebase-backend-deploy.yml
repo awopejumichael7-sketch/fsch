@@ -1,24 +1,21 @@
-name: Deploy Firestore Rules & Cloud Functions
+name: Deploy Firestore Rules & Indexes
 
-# Runs on every push to main. This workflow does the one-time folder
-# staging Firebase's tooling requires for Cloud Functions (see README,
-# section "A note on functions-index.js and functions-package.json")
-# automatically in the CI runner only — it never modifies your actual
-# repository files.
+# Runs on every push to main that touches the rules/indexes files. This is
+# entirely free — Firestore rules & indexes deployment does not require
+# the Blaze plan, only Hosting/Firestore/Auth on the free Spark plan.
 #
-# COST NOTE: Firestore rules/indexes deploy is entirely free. Cloud
-# Functions deployment and execution require your Firebase project to be
-# on the "Blaze" (pay-as-you-go) plan — Google requires a billing method
-# on file for Cloud Functions even though the free-of-charge monthly quota
-# (2,000,000 invocations, 400,000 GB-seconds, 200,000 CPU-seconds, and 5GB
-# outbound networking) comfortably covers a family app's access-key
-# operations. See README section 11 for details.
+# Cloud Functions are NOT deployed by this workflow. This app's default
+# security model (see firestore.rules and README section 14) validates
+# family setup and access-key redemption directly through Firestore
+# Security Rules + client-side Firestore transactions, so no Cloud
+# Functions — and no Blaze/billing account — are required at all. If you
+# later choose to upgrade to Blaze for the optional server-side hardening
+# in functions-index.js, use the separate, manually-triggered
+# "firebase-functions-deploy-optional.yml" workflow.
 on:
   push:
     branches: [main]
     paths:
-      - "functions-index.js"
-      - "functions-package.json"
       - "firestore.rules"
       - "firestore.indexes.json"
   workflow_dispatch: {}
@@ -27,7 +24,7 @@ permissions:
   contents: read
 
 jobs:
-  deploy_backend:
+  deploy_rules:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,16 +32,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-
-      - name: Stage Cloud Functions into the folder Firebase's CLI requires
-        run: |
-          mkdir -p functions
-          cp functions-index.js functions/index.js
-          cp functions-package.json functions/package.json
-
-      - name: Install Cloud Functions dependencies
-        working-directory: functions
-        run: npm install
 
       - name: Authenticate to Google Cloud / Firebase
         uses: google-github-actions/auth@v2
@@ -56,6 +43,3 @@ jobs:
 
       - name: Deploy Firestore rules & indexes
         run: firebase deploy --only firestore:rules,firestore:indexes --project "${{ secrets.FIREBASE_PROJECT_ID }}" --non-interactive
-
-      - name: Deploy Cloud Functions
-        run: firebase deploy --only functions --project "${{ secrets.FIREBASE_PROJECT_ID }}" --non-interactive

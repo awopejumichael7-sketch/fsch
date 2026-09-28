@@ -7,6 +7,42 @@
  * -----------------------------------------------------------------------
  */
 
+// ---- Access-key crypto helpers (Spark/free-plan security model) -----------
+// These replace what used to be done inside a Cloud Function. They rely
+// only on the Web Crypto API, which every browser provides for free on any
+// HTTPS origin (Firebase Hosting is always HTTPS) and on localhost during
+// development — no server, and no Blaze plan, required.
+
+// FAM-XXXX-XXXX using an unambiguous alphabet (no 0/O/1/I) and
+// cryptographically strong randomness (crypto.getRandomValues).
+export function generateReadableKey() {
+  const alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+  const block = () => {
+    const bytes = new Uint8Array(4);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("");
+  };
+  return `FAM-${block()}-${block()}`;
+}
+
+// One-way SHA-256 hash (hex string) of a key, computed entirely client-side.
+// The plaintext key is never written to Firestore — only this hash is,
+// which is what redemption is checked against.
+export async function sha256Hex(text) {
+  const data = new TextEncoder().encode(text.trim().toUpperCase());
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+// Display-only masked form shown in the Access Keys management table,
+// e.g. "FAM-••••-91XZ" — never the full plaintext.
+export function maskKeyDisplay(plainKey) {
+  const parts = plainKey.split("-");
+  return `${parts[0]}-••••-${(parts[2] || "").slice(-2).padStart(4, "•")}`;
+}
+
 // ---- DOM shortcuts --------------------------------------------------------
 export const $ = (selector, scope = document) => scope.querySelector(selector);
 export const $$ = (selector, scope = document) =>

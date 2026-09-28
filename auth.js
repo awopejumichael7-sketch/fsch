@@ -4,12 +4,24 @@
  * Handles: email/password auth, Google sign-in, password reset, logout,
  * session persistence, and route protection.
  *
- * ROLE & FAMILY RESOLUTION (Sections 6, 7, 51, 54)
- * The client never decides its own role or familyId. After sign-in we read
- * the user's own `users/{uid}` document, which is written ONLY by trusted
- * Cloud Functions (createFamily / redeemAccessKey). Firestore rules forbid
- * a user from writing role/familyId on their own document (see
- * firestore.rules). This prevents "role: admin" client-side tampering.
+ * ROLE & FAMILY RESOLUTION — Spark (free) plan security model, no Cloud
+ * Functions required (Sections 6, 7, 51, 54):
+ * The client never decides its own role or familyId by simply writing
+ * whatever it likes — `firestore.rules` only allows a `users/{uid}`
+ * document to be CREATED, and only when the write satisfies one of two
+ * narrow, rules-enforced conditions:
+ *   1. role: 'admin' — allowed only if the caller is also the `ownerUid`
+ *      of the brand-new `families/{familyId}` document referenced, which
+ *      was itself just created moments earlier in this same sign-up flow.
+ *   2. role: 'parent' | 'child' — allowed only if the caller supplies the
+ *      SHA-256 hash of an access key that has ALREADY been validated and
+ *      consumed (its usageCount just incremented) against that exact
+ *      familyId/role, via `redeemAccessKey` below.
+ * Once created, `users/{uid}` can never be updated by the client
+ * (firestore.rules denies all updates to it) — role/familyId are
+ * permanent from that point on. This is what stops "role: admin"
+ * client-side tampering, without needing a paid Cloud Functions plan.
+ * See README §14 for the full explanation and its trade-offs.
  * -----------------------------------------------------------------------
  */
 
@@ -24,13 +36,15 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
 import {
   doc,
+  collection,
   getDoc,
   setDoc,
+  addDoc,
+  runTransaction,
   serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
-import { httpsCallable } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-functions.js";
-import { auth, db, functionsInstance, FN } from "./firebase-config.js";
-import { friendlyError, showToast } from "./utilities.js";
+import { auth, db } from "./firebase-config.js";
+import { friendlyError, showToast, sha256Hex, DEFAULT_CATEGORIES } from "./utilities.js";
 
 /**
  * Returns the signed-in user's session profile:
@@ -72,19 +86,82 @@ export function protectPage({ onReady }) {
 }
 
 // ---- Sign up (new parent, becomes admin of a brand-new family) ------------
-// Role assignment happens server-side in the `createFamily` Cloud Function —
-// the client only supplies display info, never a role (Section 51).
+// Section 51's "controlled first-time setup" is now enforced by
+// firestore.rules rather than a Cloud Function. The writes below MUST
+// happen in this exact order: rules validate the `users/{uid}` write by
+// checking that the referenced family already exists with ownerUid == you
+// — which is only true once step 1 has actually committed.
 export async function signUpAsParent({ email, password, name, familyName }) {
   const cred = await createUserWithEmailAndPassword(auth, email, password);
-  const createFamily = httpsCallable(functionsInstance, FN.CREATE_FAMILY);
-  await createFamily({ name, familyName });
+  const uid = cred.user.uid;
+  const cleanName = name.trim();
+
+  const existing = await getDoc(doc(db, "users", uid));
+  if (existing.exists()) {
+    throw new Error("This account is already linked to a family.");
+  }
+
+  const familyRef = doc(collection(db, "families"));
+  const memberRef = doc(collection(db, "families", familyRef.id, "members"));
+
+  // 1. Family document — rules require ownerUid === you and that you don't
+  //    already have a users/{uid} profile.
+  await setDoc(familyRef, {
+    name: familyName.trim(),
+    ownerUid: uid,
+    createdAt: serverTimestamp(),
+  });
+
+  // 2. Your own member profile as the family's founding parent — rules
+  //    check the family doc created above, which now exists.
+  await setDoc(memberRef, {
+    name: cleanName,
+    role: "parent",
+    uid,
+    accountType: "linked",
+    active: true,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    createdBy: uid,
+  });
+
+  // 3. Default family settings.
+  await setDoc(doc(db, "families", familyRef.id, "settings", "app"), {
+    categories: DEFAULT_CATEGORIES,
+    pointsEnabled: true,
+    showLeaderboard: false,
+    updatedAt: serverTimestamp(),
+  });
+
+  // 4. Your users/{uid} profile — the ONE write that grants role: 'admin'.
+  //    Rules check that families/{familyId}.ownerUid === you, which is
+  //    true because step 1 already committed.
+  await setDoc(doc(db, "users", uid), {
+    role: "admin",
+    familyId: familyRef.id,
+    memberId: memberRef.id,
+    name: cleanName,
+    email: cred.user.email,
+    createdAt: serverTimestamp(),
+  });
+
+  await addDoc(collection(db, "families", familyRef.id, "activityLogs"), {
+    familyId: familyRef.id,
+    userId: uid,
+    userName: cleanName,
+    action: "Created the family",
+    timestamp: serverTimestamp(),
+  });
+
   return cred.user;
 }
 
 // ---- Sign up / sign in while redeeming a family access key ----------------
-// Used by children (or a second parent) joining an existing family. The
-// Cloud Function verifies the key server-side and writes the resulting
-// role + familyId to `users/{uid}` — the client cannot set these fields.
+// Used by children (or a second parent) joining an existing family.
+// Redemption is a Firestore transaction (a database feature available on
+// every plan, including free Spark) that atomically increments the key's
+// usageCount within its bounds — this is what prevents a limited-use key
+// from ever being over-redeemed, with no server function involved.
 export async function joinFamilyWithAccessKey({ email, password, name, accessKey, isNewAccount }) {
   let user;
   if (isNewAccount) {
@@ -94,8 +171,71 @@ export async function joinFamilyWithAccessKey({ email, password, name, accessKey
     const cred = await signInWithEmailAndPassword(auth, email, password);
     user = cred.user;
   }
-  const redeem = httpsCallable(functionsInstance, FN.REDEEM_ACCESS_KEY);
-  await redeem({ accessKey, name });
+  const uid = user.uid;
+  const cleanName = (name || "New Member").trim();
+
+  const existing = await getDoc(doc(db, "users", uid));
+  if (existing.exists()) {
+    throw new Error("This account already belongs to a family.");
+  }
+
+  const hashed = await sha256Hex(accessKey);
+  const keyRef = doc(db, "accessKeys", hashed);
+
+  // 1. Atomically validate + consume the key. Throws a friendly error if
+  //    it's missing, revoked, expired, or already used up.
+  const keyData = await runTransaction(db, async (tx) => {
+    const snap = await tx.get(keyRef);
+    if (!snap.exists()) throw new Error("This access key could not be found.");
+    const data = snap.data();
+    if (!data.active) throw new Error("This access key has been revoked.");
+    if (data.expiresAt && data.expiresAt.toMillis() < Date.now()) {
+      throw new Error("This access key has expired.");
+    }
+    if (data.usageCount >= data.maxUses) {
+      throw new Error("This access key has already reached its usage limit.");
+    }
+    const newCount = data.usageCount + 1;
+    tx.update(keyRef, { usageCount: newCount, active: newCount < data.maxUses });
+    return data;
+  });
+
+  // 2. Create your member profile — rules check that `joinedViaKeyHash`
+  //    points to a key doc whose familyId/role match and whose usageCount
+  //    now shows it has genuinely been consumed (step 1 already committed).
+  const memberRef = doc(collection(db, "families", keyData.familyId, "members"));
+  await setDoc(memberRef, {
+    name: cleanName,
+    role: keyData.role,
+    uid,
+    joinedViaKeyHash: hashed,
+    accountType: "linked",
+    active: true,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    createdBy: uid,
+  });
+
+  // 3. Your users/{uid} profile — the same joinedViaKeyHash proof grants
+  //    role: 'parent' | 'child' (never 'admin') for this exact family.
+  await setDoc(doc(db, "users", uid), {
+    role: keyData.role,
+    familyId: keyData.familyId,
+    memberId: memberRef.id,
+    name: cleanName,
+    email: user.email,
+    joinedViaKeyHash: hashed,
+    createdAt: serverTimestamp(),
+  });
+
+  await addDoc(collection(db, "families", keyData.familyId, "activityLogs"), {
+    familyId: keyData.familyId,
+    userId: uid,
+    userName: cleanName,
+    action: `Joined the family using an access key (${keyData.role})`,
+    timestamp: serverTimestamp(),
+  });
+
   return user;
 }
 

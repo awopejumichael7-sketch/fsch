@@ -3,17 +3,39 @@ rules_version = '2';
 /**
  * firestore.rules — Family Productivity Hub
  * ---------------------------------------------------------------------
- * AUTHORIZATION MODEL (Section 33, 54):
+ * AUTHORIZATION MODEL — Spark (free) plan, no Cloud Functions required
+ * (Sections 5, 33, 34, 51, 54, 60):
+ *
  *   1. Every request must be authenticated.
  *   2. A user's role and familyId are read from their OWN `users/{uid}`
- *      document — a document this ruleset makes IMPOSSIBLE for the client
- *      to write. It is only ever written by Cloud Functions using the
- *      Admin SDK (functions-index.js), which bypasses these rules by
- *      design. This is what stops "role: admin" client-side tampering.
+ *      document. That document can only ever be CREATED once, and only
+ *      when the write itself proves it's legitimate:
+ *        - role: 'admin'  -> allowed only if the caller is the `ownerUid`
+ *          of the `families/{familyId}` document referenced (which must
+ *          already exist -- see auth.js for the required write order).
+ *        - role: 'parent'/'child' -> allowed only if the caller supplies
+ *          the SHA-256 hash of an access key that has ALREADY been
+ *          validated and consumed (usageCount incremented) for that exact
+ *          familyId/role -- see the accessKeys/{hashedKey} rules below.
+ *      `users/{uid}` can never be UPDATED by the client afterwards, so
+ *      role/familyId are permanent from that point on. This is what stops
+ *      "role: admin" client-side tampering -- no Admin SDK involved.
  *   3. Every family-scoped read/write re-checks that the caller's own
- *      familyId matches the {familyId} in the document path — a user's
- *      familyId is NEVER taken from client-supplied request data.
+ *      familyId (from their own users/{uid} doc) matches the {familyId}
+ *      in the document path -- a familyId supplied directly by the client
+ *      in request data is never trusted on its own.
  *   4. Children get narrower read/write access than parents/admins.
+ *
+ * TRADE-OFF, STATED PLAINLY: this pattern is a well-established way to
+ * secure Firebase apps without Cloud Functions, but it does rely on
+ * Firestore rules' `get()` calls (billed as ordinary, free-tier-eligible
+ * Firestore reads) rather than a single trusted server process, and it
+ * has no built-in per-IP rate limiting on key redemption attempts. Key
+ * guessing is still impractical (FAM-XXXX-XXXX draws from a 32-character
+ * alphabet across 8 random characters -- roughly 10^12 combinations), but
+ * if you later want defense-in-depth rate limiting or a single audited
+ * code path, functions-index.js is kept in this project as a drop-in
+ * upgrade for when/if you move to the Blaze plan. See README section 14.
  * ---------------------------------------------------------------------
  */
 service cloud.firestore {
@@ -22,6 +44,10 @@ service cloud.firestore {
     // ---- Helpers -----------------------------------------------------
     function isSignedIn() {
       return request.auth != null;
+    }
+
+    function hasProfile() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
     }
 
     function myProfile() {
@@ -41,40 +67,130 @@ service cloud.firestore {
     }
 
     function isParentOrAdmin() {
-      return isSignedIn() && (myRole() == 'admin' || myRole() == 'parent');
+      return isSignedIn() && hasProfile() && (myRole() == 'admin' || myRole() == 'parent');
     }
 
     function belongsToFamily(familyId) {
-      return isSignedIn() && myFamilyId() == familyId;
+      return isSignedIn() && hasProfile() && myFamilyId() == familyId;
+    }
+
+    function accessKey(hash) {
+      return get(/databases/$(database)/documents/accessKeys/$(hash)).data;
     }
 
     // ---- users/{uid} ---------------------------------------------------
-    // A user may READ only their own profile. NO client writes are ever
-    // allowed — role and familyId are exclusively set by Cloud Functions
-    // (createFamily / redeemAccessKey) via the Admin SDK.
+    // Read: only your own profile. Create: exactly once, and only along
+    // one of the two proof-of-legitimacy paths described above. Update:
+    // never -- role/familyId are permanent once set.
     match /users/{uid} {
       allow read: if isSignedIn() && request.auth.uid == uid;
-      allow write: if false;
+
+      allow create: if isSignedIn() && request.auth.uid == uid &&
+        request.resource.data.role in ['admin', 'parent', 'child'] &&
+        request.resource.data.familyId is string &&
+        (
+          // Path A -- founding a brand-new family as its admin.
+          (
+            request.resource.data.role == 'admin' &&
+            get(/databases/$(database)/documents/families/$(request.resource.data.familyId)).data.ownerUid == request.auth.uid
+          )
+          ||
+          // Path B -- joining via an already-consumed access key.
+          (
+            request.resource.data.role != 'admin' &&
+            request.resource.data.joinedViaKeyHash is string &&
+            accessKey(request.resource.data.joinedViaKeyHash).familyId == request.resource.data.familyId &&
+            accessKey(request.resource.data.joinedViaKeyHash).role == request.resource.data.role &&
+            accessKey(request.resource.data.joinedViaKeyHash).usageCount >= 1
+          )
+        );
+
+      allow update, delete: if false;
     }
 
-    // ---- accessKeyIndex/{hashedKey} -------------------------------------
-    // Server-only lookup table used by redeemAccessKey / generateAccessKey.
-    // No client, of any role, may ever read or write this collection.
-    match /accessKeyIndex/{hashedKey} {
-      allow read, write: if false;
+    // ---- accessKeys/{hashedKey} (Sections 5, 34, 53) ---------------------
+    // Top-level collection; the document ID IS the SHA-256 hash of the
+    // plaintext key (see utilities.js:sha256Hex). The plaintext itself is
+    // never stored. `get` (single-document lookup by exact ID) is allowed
+    // broadly because that ID is computationally unguessable; `list`
+    // (querying/enumerating the collection) is restricted to a family's
+    // own parent/admin so keys can never be browsed or discovered.
+    match /accessKeys/{hashedKey} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn() && isParentOrAdmin() && resource.data.familyId == myFamilyId();
+
+      allow create: if isSignedIn() && isParentOrAdmin() &&
+        request.resource.data.familyId == myFamilyId() &&
+        request.resource.data.role in ['parent', 'child'] &&
+        request.resource.data.usageCount == 0 &&
+        request.resource.data.active == true &&
+        request.resource.data.maxUses is int &&
+        request.resource.data.maxUses >= 1 && request.resource.data.maxUses <= 50;
+
+      allow update: if
+        ( // Revoke -- the owning family's parent/admin only; no other
+          // field may change on this write.
+          isParentOrAdmin() && resource.data.familyId == myFamilyId() &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active', 'revokedAt', 'revokedBy']) &&
+          request.resource.data.active == false
+        )
+        ||
+        ( // Redemption -- any signed-in user (they may not have a family
+          // profile yet), strictly bounded to a single +1 step and only
+          // while the key is active, unexpired, and under its use limit.
+          isSignedIn() &&
+          resource.data.active == true &&
+          (resource.data.expiresAt == null || resource.data.expiresAt > request.time) &&
+          resource.data.usageCount < resource.data.maxUses &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['usageCount', 'active']) &&
+          request.resource.data.usageCount == resource.data.usageCount + 1
+        );
+
+      allow delete: if false;
     }
 
     // ---- families/{familyId} --------------------------------------------
     match /families/{familyId} {
       allow read: if belongsToFamily(familyId);
-      allow create: if false; // only createFamily() Cloud Function creates families
+
+      // A brand-new family only: you must not already have a profile, and
+      // you must name yourself as its owner.
+      allow create: if isSignedIn() && !hasProfile() &&
+        request.resource.data.ownerUid == request.auth.uid;
+
       allow update: if belongsToFamily(familyId) && isParentOrAdmin();
       allow delete: if false;
 
       // ---- members/{memberId} (Section 9) -------------------------------
       match /members/{memberId} {
         allow read: if belongsToFamily(familyId);
-        allow create, update: if belongsToFamily(familyId) && isParentOrAdmin();
+
+        allow create: if
+          // Normal path: a parent/admin adding someone (including a
+          // pending, not-yet-linked slot).
+          (belongsToFamily(familyId) && isParentOrAdmin())
+          ||
+          // Bootstrap path: founding parent creating their own profile in
+          // the same family they just created (no users/{uid} doc yet).
+          (
+            isSignedIn() && !hasProfile() &&
+            request.resource.data.uid == request.auth.uid &&
+            request.resource.data.role == 'parent' &&
+            get(/databases/$(database)/documents/families/$(familyId)).data.ownerUid == request.auth.uid
+          )
+          ||
+          // Join path: creating your own member profile backed by an
+          // already-consumed access key for this exact family/role.
+          (
+            isSignedIn() &&
+            request.resource.data.uid == request.auth.uid &&
+            request.resource.data.joinedViaKeyHash is string &&
+            accessKey(request.resource.data.joinedViaKeyHash).familyId == familyId &&
+            accessKey(request.resource.data.joinedViaKeyHash).role == request.resource.data.role &&
+            accessKey(request.resource.data.joinedViaKeyHash).usageCount >= 1
+          );
+
+        allow update: if belongsToFamily(familyId) && isParentOrAdmin();
         allow delete: if false; // soft-delete only, via update({active:false})
       }
 
@@ -88,7 +204,7 @@ service cloud.firestore {
           request.resource.data.assignedTo is string;
 
         // Parents/admins may edit any field. Children may ONLY toggle their
-        // own task's completion-related fields — never assignedTo, title,
+        // own task's completion-related fields -- never assignedTo, title,
         // date, or times (Section 15: cannot affect another child's task,
         // and cannot silently reassign work to themselves).
         allow update: if belongsToFamily(familyId) && (
@@ -141,7 +257,19 @@ service cloud.firestore {
       // ---- settings/app (Sections 18, 26, 40-41) --------------------------
       match /settings/{settingId} {
         allow read: if belongsToFamily(familyId);
-        allow write: if belongsToFamily(familyId) && isParentOrAdmin();
+
+        allow create: if
+          (belongsToFamily(familyId) && isParentOrAdmin())
+          ||
+          // Bootstrap path: founding parent writing default settings right
+          // after creating the family, before their own profile exists.
+          (
+            isSignedIn() && !hasProfile() &&
+            get(/databases/$(database)/documents/families/$(familyId)).data.ownerUid == request.auth.uid
+          );
+
+        allow update: if belongsToFamily(familyId) && isParentOrAdmin();
+        allow delete: if false;
       }
 
       // ---- activityLogs/{logId} (Section 32) -------------------------------
@@ -154,14 +282,6 @@ service cloud.firestore {
           request.resource.data.userId == request.auth.uid &&
           request.resource.data.familyId == familyId;
         allow update, delete: if false;
-      }
-
-      // ---- accessKeys/{keyId} (Sections 5, 34, 53) --------------------------
-      // Display/management records only (masked key, never plaintext).
-      // All writes happen exclusively through Cloud Functions.
-      match /accessKeys/{keyId} {
-        allow read: if belongsToFamily(familyId) && isParentOrAdmin();
-        allow write: if false;
       }
     }
   }

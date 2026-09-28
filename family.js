@@ -2,9 +2,22 @@
  * family.js
  * -----------------------------------------------------------------------
  * Family member CRUD (Section 9) + Access Key management UI (Sections 5,
- * 34, 53). Key generation/revocation and redemption are executed through
- * Cloud Functions (functions-index.js) — this file never trusts a raw
- * client-side "is this key valid?" check.
+ * 34, 53).
+ *
+ * ACCESS KEYS — Spark (free) plan security model, no Cloud Functions:
+ * Keys live in a single top-level `accessKeys/{hashedKey}` collection,
+ * where the document ID is the SHA-256 hash of the plaintext key (computed
+ * client-side via the Web Crypto API in utilities.js). The plaintext is
+ * never written to Firestore — only ever returned once, at the moment of
+ * generation, for the parent to copy and share.
+ * firestore.rules enforces everything a Cloud Function used to:
+ *   - Only a parent/admin of the matching family may CREATE a key.
+ *   - Redemption may only ever increment usageCount by exactly 1, and only
+ *     while the key is active, unexpired, and under its max-use limit —
+ *     enforced field-by-field in the rules, not trusted from the client.
+ *   - Only a parent/admin of the matching family may revoke a key
+ *     (flip `active` to false); no other field may change on that write.
+ * See README §14 for the full explanation and its trade-offs.
  * -----------------------------------------------------------------------
  */
 
@@ -12,22 +25,22 @@ import {
   collection,
   doc,
   addDoc,
+  setDoc,
   updateDoc,
-  deleteDoc,
   onSnapshot,
   query,
   where,
   orderBy,
   serverTimestamp,
+  Timestamp,
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
-import { httpsCallable } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-functions.js";
-import { db, functionsInstance, FN } from "./firebase-config.js";
-import { el, showToast, friendlyError, confirmAction, generateId } from "./utilities.js";
+import { db } from "./firebase-config.js";
+import { el, generateReadableKey, sha256Hex, maskKeyDisplay } from "./utilities.js";
 import { logActivity } from "./reports.js";
 
 // ---- Firestore paths --------------------------------------------------
 const membersCol = (familyId) => collection(db, "families", familyId, "members");
-const keysCol = (familyId) => collection(db, "families", familyId, "accessKeys");
+const accessKeysCol = () => collection(db, "accessKeys");
 
 // ---- Members CRUD -------------------------------------------------------
 export function watchMembers(familyId, callback) {
@@ -80,23 +93,59 @@ export async function deactivateMember(familyId, session, memberId, memberName) 
   return true;
 }
 
-// ---- Access Keys (generation/revocation go through Cloud Functions) -----
+// ---- Access Keys (Firestore-rules-secured, Spark/free plan) -------------
 export function watchAccessKeys(familyId, callback) {
-  const q = query(keysCol(familyId), orderBy("createdAt", "desc"));
+  const q = query(accessKeysCol(), where("familyId", "==", familyId), orderBy("createdAt", "desc"));
   return onSnapshot(q, (snap) => {
     callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
   });
 }
 
-export async function generateAccessKey({ role, expiresInDays, maxUses, memberId }) {
-  const fn = httpsCallable(functionsInstance, FN.GENERATE_ACCESS_KEY);
-  const res = await fn({ role, expiresInDays, maxUses, memberId });
-  return res.data; // { key, keyId }
+// Generates a key, hashes it, and writes only the hash to Firestore.
+// firestore.rules independently re-checks that the caller is a parent/admin
+// of `familyId` and that the new document's usageCount/active/maxUses are
+// all sane starting values — the client's honesty is never assumed.
+export async function generateAccessKey(session, { role, expiresInDays, maxUses }) {
+  // Math.round guarantees a true integer is sent to Firestore — the
+  // security rule requires maxUses to satisfy `is int`, and a stray
+  // decimal (e.g. unusual browser number-input behavior) would otherwise
+  // be stored as a Firestore double and silently fail that check.
+  const safeMaxUses = Math.round(Math.min(Math.max(Number(maxUses) || 1, 1), 50));
+  const safeExpiryDays = Math.round(Math.min(Math.max(Number(expiresInDays) || 7, 1), 365));
+
+  const plainKey = generateReadableKey();
+  const hashed = await sha256Hex(plainKey);
+  const expiresAt = Timestamp.fromMillis(Date.now() + safeExpiryDays * 86400000);
+  const keyRef = doc(db, "accessKeys", hashed);
+
+  await setDoc(keyRef, {
+    familyId: session.familyId,
+    role,
+    maxUses: safeMaxUses,
+    usageCount: 0,
+    active: true,
+    expiresAt,
+    maskedKey: maskKeyDisplay(plainKey),
+    createdAt: serverTimestamp(),
+    createdBy: session.uid,
+  });
+
+  await logActivity(session.familyId, session, `Generated a new ${role === "parent" ? "Parent" : "Child"} access key`);
+
+  // The plaintext is returned exactly once — the UI copies it to the
+  // clipboard immediately and never stores it anywhere itself.
+  return { key: plainKey, keyId: hashed };
 }
 
-export async function revokeAccessKey(keyId) {
-  const fn = httpsCallable(functionsInstance, FN.REVOKE_ACCESS_KEY);
-  await fn({ keyId });
+// Revoking only ever flips `active` to false — firestore.rules rejects any
+// update that touches usageCount, maxUses, role, or familyId here.
+export async function revokeAccessKey(session, keyId) {
+  await updateDoc(doc(db, "accessKeys", keyId), {
+    active: false,
+    revokedAt: serverTimestamp(),
+    revokedBy: session.uid,
+  });
+  await logActivity(session.familyId, session, "Revoked an access key");
 }
 
 // ---- Rendering: Family Members list (used by dashboard.html) -----------
