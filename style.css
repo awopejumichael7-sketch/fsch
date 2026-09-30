@@ -230,6 +230,15 @@ input:focus, select:focus, textarea:focus, button:focus-visible {
   box-shadow: var(--shadow-modal);
 }
 .modal__actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 0.8rem; }
+.modal__actions--spread { justify-content: space-between; flex-wrap: wrap; }
+.modal__actions-group { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+
+/* ---- Wide modal variant + bulk task rows (Add Multiple Tasks) ------------- */
+.modal--wide { max-width: 680px; }
+.bulk-task-rows { display: flex; flex-direction: column; gap: 1rem; margin-bottom: 1rem; max-height: 48vh; overflow-y: auto; padding-right: 0.2rem; }
+.bulk-task-row { border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 0.9rem; background: var(--color-bg); }
+.bulk-task-row__header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; }
+.bulk-task-row__label { font-weight: 600; font-size: 0.85rem; color: var(--color-text-muted); }
 
 /* ---- Chips / pills --------------------------------------------------------- */
 .chip { display: inline-block; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: 999px; padding: 0.2rem 0.7rem; font-size: 0.78rem; margin-right: 0.3rem; }

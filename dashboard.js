@@ -12,6 +12,7 @@ import {
   createMember,
   updateMember,
   deactivateMember,
+  deleteMemberPermanently,
   watchAccessKeys,
   generateAccessKey,
   revokeAccessKey,
@@ -42,6 +43,7 @@ import {
   printReport,
 } from "./reports.js";
 import { watchFamilySettings, updateFamilySettings, initTheme, setStoredTheme, getStoredTheme, applyPalette } from "./settings.js";
+import { notifyTaskAdded, notifyTaskCompleted, startReminderScan } from "./email-reminders.js";
 import {
   $,
   $$,
@@ -50,6 +52,7 @@ import {
   friendlyError,
   debounce,
   todayKey,
+  dateKey,
   formatFriendlyDate,
   startOfWeek,
   addDays,
@@ -129,10 +132,21 @@ function bootstrap(session) {
 
   wireNavigation();
   wireQuickAdd();
+  wireBulkAddTasks();
   wireSearch();
   wireOfflineIndicator();
   wireSettingsForm();
+  wireReportsActions();
   wireLogout();
+
+  // Email reminders (Sections 31/32 extension): checks upcoming/overdue
+  // tasks roughly once a minute while this dashboard is open. See
+  // email-reminders.js and README for what this can and can't guarantee.
+  startReminderScan(() => ({
+    tasks: state.tasks,
+    members: state.members,
+    settings: state.settings,
+  }));
 
   render();
 }
@@ -202,6 +216,20 @@ function renderDashboardView() {
   }
 }
 
+// Shared by every task-list rendering site so the "task completed" email
+// hook (and error handling) only has to be written once.
+async function handleToggleTask(task) {
+  try {
+    const wasIncomplete = !task.completed;
+    await toggleTaskCompletion(state.session.familyId, state.session, task);
+    if (wasIncomplete) {
+      notifyTaskCompleted(task, state.members, state.settings).catch(() => {});
+    }
+  } catch (e) {
+    showToast(friendlyError(e), "error");
+  }
+}
+
 function renderTaskList(container, tasks) {
   if (!container) return;
   container.innerHTML = "";
@@ -213,7 +241,7 @@ function renderTaskList(container, tasks) {
     container.appendChild(
       renderTaskCard(t, state.members, {
         session: state.session,
-        onToggle: (task) => toggleTaskCompletion(state.session.familyId, state.session, task).catch((e) => showToast(friendlyError(e), "error")),
+        onToggle: handleToggleTask,
         onEdit: openTaskModal,
         onDelete: (task) => deleteTask(state.session.familyId, state.session, task).catch((e) => showToast(friendlyError(e), "error")),
       })
@@ -235,7 +263,7 @@ $("#daily-prev")?.addEventListener("click", () => shiftDay(-1));
 $("#daily-next")?.addEventListener("click", () => shiftDay(1));
 $("#daily-today")?.addEventListener("click", () => { state.currentDay = todayKey(); renderDailyView(); });
 function shiftDay(delta) {
-  state.currentDay = addDays(state.currentDay, delta).toISOString().slice(0, 10);
+  state.currentDay = dateKey(addDays(state.currentDay, delta));
   renderDailyView();
 }
 
@@ -254,9 +282,9 @@ function renderWeeklyView() {
       col.appendChild(
         renderTaskCard(t, state.members, {
           session: state.session,
-          onToggle: (task) => toggleTaskCompletion(state.session.familyId, state.session, task),
+          onToggle: handleToggleTask,
           onEdit: openTaskModal,
-          onDelete: (task) => deleteTask(state.session.familyId, state.session, task),
+          onDelete: (task) => deleteTask(state.session.familyId, state.session, task).catch((e) => showToast(friendlyError(e), "error")),
         })
       )
     );
@@ -285,11 +313,11 @@ function renderMonthlyView() {
   for (let i = 0; i < startOffset; i += 1) grid.appendChild(el("div", { class: "monthly-cell monthly-cell--empty" }));
 
   for (let day = 1; day <= daysInMonth; day += 1) {
-    const dateKey = new Date(year, month, day).toISOString().slice(0, 10);
-    const dayTasks = map[dateKey] || [];
+    const cellKey = dateKey(new Date(year, month, day));
+    const dayTasks = map[cellKey] || [];
     const cell = el("div", {
-      class: `monthly-cell ${dateKey === todayKey() ? "monthly-cell--today" : ""}`,
-      onClick: () => { state.currentDay = dateKey; state.currentView = "daily"; $$('.nav-link').forEach(l => l.classList.toggle('nav-link--active', l.dataset.view === 'daily')); render(); },
+      class: `monthly-cell ${cellKey === todayKey() ? "monthly-cell--today" : ""}`,
+      onClick: () => { state.currentDay = cellKey; state.currentView = "daily"; $$('.nav-link').forEach(l => l.classList.toggle('nav-link--active', l.dataset.view === 'daily')); render(); },
     }, [
       el("span", { class: "monthly-cell__num" }, String(day)),
       dayTasks.length ? el("span", { class: "monthly-cell__count" }, String(dayTasks.length)) : null,
@@ -367,9 +395,17 @@ function renderReportsView() {
       logList.appendChild(el("li", {}, `${log.userName}: ${log.action} — ${time}`));
     });
   }
+}
 
-  $("#export-csv-btn")?.addEventListener("click", () => exportTasksToCSV(report.tasks, state.members), { once: true });
-  $("#print-report-btn")?.addEventListener("click", printReport, { once: true });
+// Wired ONCE (see bootstrap()) rather than inside renderReportsView(), which
+// runs on almost every state change — attaching a fresh listener on every
+// render used to stack duplicate handlers on the same button.
+function wireReportsActions() {
+  $("#export-csv-btn")?.addEventListener("click", () => {
+    const report = weeklyReport(getVisibleTasks());
+    exportTasksToCSV(report.tasks, state.members);
+  });
+  $("#print-report-btn")?.addEventListener("click", printReport);
 }
 
 // ---- Family / members view (Section 9) ---------------------------------------
@@ -422,6 +458,13 @@ function renderSettingsView() {
     catList.innerHTML = "";
     (state.settings.categories || DEFAULT_CATEGORIES).forEach((c) => catList.appendChild(el("span", { class: "chip" }, c)));
   }
+
+  const emailToggle = $("#email-reminders-toggle");
+  if (emailToggle) emailToggle.checked = !!state.settings.emailRemindersEnabled;
+  const emailAddress = $("#notification-email-input");
+  if (emailAddress && document.activeElement !== emailAddress) emailAddress.value = state.settings.notificationEmail || "";
+  const leadMinutes = $("#reminder-lead-minutes-input");
+  if (leadMinutes && document.activeElement !== leadMinutes) leadMinutes.value = state.settings.reminderLeadMinutes || 30;
 }
 
 function wireSettingsForm() {
@@ -452,6 +495,18 @@ function wireSettingsForm() {
       amber: form.amber.value,
     };
     updateFamilySettings(state.session.familyId, state.session, { palette });
+  });
+
+  $("#email-reminders-form")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const leadMinutes = Math.min(Math.max(Number(form.reminderLeadMinutes.value) || 30, 5), 1440);
+    updateFamilySettings(state.session.familyId, state.session, {
+      emailRemindersEnabled: form.emailRemindersEnabled.checked,
+      notificationEmail: form.notificationEmail.value.trim(),
+      reminderLeadMinutes: leadMinutes,
+    });
+    showToast("Email reminder settings saved.", "success");
   });
 }
 
@@ -495,6 +550,7 @@ function wireSearch() {
 // ---- Quick Add modal (Sections 55-56) ------------------------------------------
 function wireQuickAdd() {
   $("#quick-add-task-btn")?.addEventListener("click", () => openTaskModal());
+  $("#quick-add-bulk-tasks-btn")?.addEventListener("click", () => openBulkTaskModal());
   $("#quick-add-goal-btn")?.addEventListener("click", () => openGoalModal());
   $("#quick-add-habit-btn")?.addEventListener("click", () => openHabitModal());
   $("#quick-add-member-btn")?.addEventListener("click", () => openMemberModal());
@@ -504,7 +560,7 @@ function wireQuickAdd() {
     e.preventDefault();
     const form = e.target;
     const editingId = form.dataset.editingId;
-    const input = {
+    const baseInput = {
       assignedTo: form.assignedTo.value,
       title: form.title.value,
       description: form.description.value,
@@ -513,22 +569,41 @@ function wireQuickAdd() {
       endTime: form.endTime.value,
       category: form.category.value,
       priority: form.priority.value,
-      recurring: form.recurring.value,
       notes: form.notes.value,
     };
+    const submitBtn = form.querySelector("button[type=submit]");
+    submitBtn.disabled = true;
     try {
       if (editingId) {
-        await updateTask(state.session.familyId, state.session, editingId, input);
+        // Recurrence is a create-time-only concept here (a whole series is
+        // generated at once) — editing a single instance never sends
+        // `recurring`, so it can no longer be silently reset to "none".
+        await updateTask(state.session.familyId, state.session, editingId, baseInput);
         showToast("Task updated.", "success");
+        closeModal("#task-modal");
+        form.reset();
+        delete form.dataset.editingId;
       } else {
-        await createTask(state.session.familyId, state.session, input);
-        showToast("Task created successfully.", "success");
+        const createdId = await createTask(state.session.familyId, state.session, {
+          ...baseInput,
+          recurring: form.recurring.value,
+        });
+        if (createdId) {
+          showToast("Task created successfully.", "success");
+          closeModal("#task-modal");
+          form.reset();
+          notifyTaskAdded(baseInput, state.members, state.settings).catch(() => {});
+        } else {
+          // createTask returns null when the parent declined to proceed
+          // past a schedule-conflict warning — nothing was saved, so say so
+          // instead of falsely reporting success.
+          showToast("Task not saved.", "info");
+        }
       }
-      closeModal("#task-modal");
-      form.reset();
-      delete form.dataset.editingId;
     } catch (err) {
       showToast(friendlyError(err), "error");
+    } finally {
+      submitBtn.disabled = false;
     }
   });
 
@@ -571,16 +646,53 @@ function wireQuickAdd() {
   $("#member-modal-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const form = e.target;
+    const editingId = form.dataset.editingId;
+    const fields = {
+      name: form.name.value,
+      role: form.role.value,
+      age: form.age.value,
+      email: form.email.value,
+    };
     try {
-      await createMember(state.session.familyId, state.session, {
-        name: form.name.value,
-        role: form.role.value,
-        age: form.age.value,
-        email: form.email.value,
-      });
-      showToast("Family member added.", "success");
+      if (editingId) {
+        await updateMember(state.session.familyId, state.session, editingId, fields);
+        showToast("Family member updated.", "success");
+      } else {
+        await createMember(state.session.familyId, state.session, fields);
+        showToast("Family member added.", "success");
+      }
       closeModal("#member-modal");
       form.reset();
+      delete form.dataset.editingId;
+      editingMember = null;
+    } catch (err) {
+      showToast(friendlyError(err), "error");
+    }
+  });
+
+  $("#member-deactivate-btn")?.addEventListener("click", async () => {
+    if (!editingMember) return;
+    try {
+      const ok = await deactivateMember(state.session.familyId, state.session, editingMember.id, editingMember.name);
+      if (ok) {
+        showToast("Family member deactivated.", "success");
+        closeModal("#member-modal");
+        editingMember = null;
+      }
+    } catch (err) {
+      showToast(friendlyError(err), "error");
+    }
+  });
+
+  $("#member-delete-btn")?.addEventListener("click", async () => {
+    if (!editingMember) return;
+    try {
+      const ok = await deleteMemberPermanently(state.session.familyId, state.session, editingMember);
+      if (ok) {
+        showToast("Family member permanently deleted.", "success");
+        closeModal("#member-modal");
+        editingMember = null;
+      }
     } catch (err) {
       showToast(friendlyError(err), "error");
     }
@@ -589,6 +701,165 @@ function wireQuickAdd() {
   $$("[data-close-modal]").forEach((btn) =>
     btn.addEventListener("click", () => closeModal(`#${btn.dataset.closeModal}`))
   );
+}
+
+// ---- Add Multiple Tasks (bulk add) -----------------------------------------
+// Each row is created through the same createTask() used everywhere else in
+// the app, one at a time in sequence, so per-task validation, schedule
+// conflict warnings, and activity logging all behave identically to adding
+// a single task — this feature adds a way to fill in several at once, it
+// does not introduce a second, different way of creating a task.
+function buildBulkMemberSelect() {
+  const select = el("select", { class: "member-select", "data-field": "assignedTo", required: "required" });
+  state.members
+    .filter((m) => m.active !== false)
+    .forEach((m) => select.appendChild(el("option", { value: m.id }, m.name)));
+  return select;
+}
+
+function buildBulkCategorySelect() {
+  const select = el("select", { "data-field": "category" });
+  (state.settings.categories || DEFAULT_CATEGORIES).forEach((c) => select.appendChild(el("option", { value: c }, c)));
+  return select;
+}
+
+function buildBulkPrioritySelect() {
+  const select = el("select", { "data-field": "priority" });
+  ["High", "Medium", "Low"].forEach((p) =>
+    select.appendChild(el("option", { value: p, selected: p === "Medium" ? "selected" : undefined }, p))
+  );
+  return select;
+}
+
+function buildBulkTaskRow(index) {
+  const row = el("div", { class: "bulk-task-row" }, [
+    el("div", { class: "bulk-task-row__header" }, [
+      el("span", { class: "bulk-task-row__label" }, `Task ${index}`),
+      el("button", {
+        type: "button",
+        class: "icon-btn",
+        title: "Remove this task",
+        onClick: () => removeBulkTaskRow(row),
+      }, "✕"),
+    ]),
+    el("div", { class: "form-row" }, [
+      el("label", {}, ["Assign To", buildBulkMemberSelect()]),
+      el("label", {}, ["Task", el("input", { type: "text", "data-field": "title", required: "required", placeholder: "e.g. Mathematics Revision" })]),
+    ]),
+    el("div", { class: "form-row" }, [
+      el("label", {}, ["Date", el("input", { type: "date", "data-field": "date", required: "required", value: state.currentDay || todayKey() })]),
+      el("label", {}, ["Start Time", el("input", { type: "time", "data-field": "startTime", required: "required" })]),
+      el("label", {}, ["End Time", el("input", { type: "time", "data-field": "endTime", required: "required" })]),
+    ]),
+    el("div", { class: "form-row" }, [
+      el("label", {}, ["Category", buildBulkCategorySelect()]),
+      el("label", {}, ["Priority", buildBulkPrioritySelect()]),
+    ]),
+  ]);
+  return row;
+}
+
+function renumberBulkRows() {
+  const container = $("#bulk-task-rows");
+  if (!container) return;
+  $$(".bulk-task-row", container).forEach((row, idx) => {
+    const label = row.querySelector(".bulk-task-row__label");
+    if (label) label.textContent = `Task ${idx + 1}`;
+  });
+}
+
+function removeBulkTaskRow(row) {
+  const container = $("#bulk-task-rows");
+  if (!container) return;
+  if (container.children.length <= 1) {
+    showToast("At least one task is required.", "info");
+    return;
+  }
+  row.remove();
+  renumberBulkRows();
+}
+
+function resetBulkTaskModal() {
+  const container = $("#bulk-task-rows");
+  if (!container) return;
+  container.innerHTML = "";
+  container.appendChild(buildBulkTaskRow(1));
+  container.appendChild(buildBulkTaskRow(2));
+}
+
+function openBulkTaskModal() {
+  resetBulkTaskModal();
+  $("#bulk-task-modal")?.classList.add("modal-overlay--visible");
+}
+
+function wireBulkAddTasks() {
+  $("#bulk-add-row-btn")?.addEventListener("click", () => {
+    const container = $("#bulk-task-rows");
+    if (!container) return;
+    container.appendChild(buildBulkTaskRow(container.children.length + 1));
+  });
+
+  $("#bulk-task-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const container = $("#bulk-task-rows");
+    const rows = $$(".bulk-task-row", container);
+    if (!rows.length) return;
+
+    const submitBtn = e.target.querySelector("button[type=submit]");
+    submitBtn.disabled = true;
+
+    let successCount = 0;
+    const errors = [];
+    const rowsToRemove = [];
+
+    // Sequential on purpose: a schedule conflict opens its own confirm
+    // dialog (see tasks.js/createTask + utilities.js/confirmAction), and
+    // those need to be resolved one at a time, not stacked simultaneously.
+    for (let i = 0; i < rows.length; i += 1) {
+      const row = rows[i];
+      const getField = (name) => row.querySelector(`[data-field="${name}"]`)?.value || "";
+      const input = {
+        assignedTo: getField("assignedTo"),
+        title: getField("title"),
+        date: getField("date"),
+        startTime: getField("startTime"),
+        endTime: getField("endTime"),
+        category: getField("category") || "Other",
+        priority: getField("priority") || "Medium",
+        description: "",
+        notes: "",
+      };
+      const rowLabel = `Task ${i + 1}${input.title ? ` ("${input.title}")` : ""}`;
+      try {
+        const createdId = await createTask(state.session.familyId, state.session, input);
+        if (createdId) {
+          successCount += 1;
+          rowsToRemove.push(row);
+          notifyTaskAdded(input, state.members, state.settings).catch(() => {});
+        } else {
+          errors.push(`${rowLabel}: not saved.`);
+        }
+      } catch (err) {
+        errors.push(`${rowLabel}: ${friendlyError(err)}`);
+      }
+    }
+
+    // Only remove rows that actually saved, so a partial failure never
+    // risks re-submitting (and duplicating) tasks that already succeeded.
+    rowsToRemove.forEach((row) => row.remove());
+    renumberBulkRows();
+    submitBtn.disabled = false;
+
+    if (successCount) {
+      showToast(`${successCount} task${successCount === 1 ? "" : "s"} created successfully.`, "success");
+    }
+    if (errors.length) {
+      showToast(errors.join(" "), "error", 9000);
+    } else {
+      closeModal("#bulk-task-modal");
+      resetBulkTaskModal();
+    }
+  });
 }
 
 function openTaskModal(task = null) {
@@ -605,24 +876,42 @@ function openTaskModal(task = null) {
     form.category.value = task.category;
     form.priority.value = task.priority;
     form.notes.value = task.notes;
+    form.recurring.value = task.recurring || "none";
+    form.recurring.disabled = true;
   } else {
     form.reset();
     delete form.dataset.editingId;
     form.date.value = state.currentDay || todayKey();
+    form.recurring.disabled = false;
   }
   modal.classList.add("modal-overlay--visible");
 }
 function openGoalModal() { $("#goal-modal").classList.add("modal-overlay--visible"); }
 function openHabitModal() { $("#habit-modal").classList.add("modal-overlay--visible"); }
+let editingMember = null;
+
 function openMemberModal(member = null) {
   const modal = $("#member-modal");
   const form = $("#member-modal-form");
   form.reset();
+  editingMember = member;
+  const deactivateBtn = $("#member-deactivate-btn");
+  const deleteBtn = $("#member-delete-btn");
   if (member) {
+    form.dataset.editingId = member.id;
     form.name.value = member.name;
     form.role.value = member.role;
     form.age.value = member.age || "";
     form.email.value = member.email || "";
+    // A parent editing their OWN record can't deactivate/delete themselves
+    // here — that would risk leaving the family with no admin.
+    const isSelf = member.uid === state.session.uid;
+    if (deactivateBtn) deactivateBtn.style.display = isSelf ? "none" : "";
+    if (deleteBtn) deleteBtn.style.display = isSelf ? "none" : "";
+  } else {
+    delete form.dataset.editingId;
+    if (deactivateBtn) deactivateBtn.style.display = "none";
+    if (deleteBtn) deleteBtn.style.display = "none";
   }
   modal.classList.add("modal-overlay--visible");
 }

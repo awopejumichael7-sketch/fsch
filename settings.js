@@ -40,7 +40,15 @@ export function watchFamilySettings(familyId, callback) {
     callback(
       snap.exists()
         ? snap.data()
-        : { categories: DEFAULT_CATEGORIES, pointsEnabled: true, showLeaderboard: false, palette: defaultPalette() }
+        : {
+            categories: DEFAULT_CATEGORIES,
+            pointsEnabled: true,
+            showLeaderboard: false,
+            palette: defaultPalette(),
+            emailRemindersEnabled: false,
+            notificationEmail: "",
+            reminderLeadMinutes: 30,
+          }
     );
   });
 }

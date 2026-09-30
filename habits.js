@@ -35,7 +35,7 @@ export async function createHabit(familyId, session, input) {
     assignedTo: input.assignedTo,
     name: input.name.trim(),
     frequency: input.frequency || "daily", // daily | weekly | custom
-    startDate: input.startDate || new Date().toISOString().slice(0, 10),
+    startDate: input.startDate || todayKey(),
     targetDate: input.targetDate || null,
     currentStreak: 0,
     longestStreak: 0,

@@ -191,7 +191,11 @@ service cloud.firestore {
           );
 
         allow update: if belongsToFamily(familyId) && isParentOrAdmin();
-        allow delete: if false; // soft-delete only, via update({active:false})
+        // A parent/admin may permanently delete a member (e.g. removing a
+        // child's information on request). Soft-delete via
+        // update({active:false}) remains available above as the default,
+        // less destructive option.
+        allow delete: if belongsToFamily(familyId) && isParentOrAdmin();
       }
 
       // ---- tasks/{taskId} (Sections 10, 11, 15, 20) ----------------------

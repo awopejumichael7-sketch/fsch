@@ -15,7 +15,7 @@ import {
   serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 import { db } from "./firebase-config.js";
-import { computeStatus, todayKey, startOfWeek, addDays } from "./utilities.js";
+import { computeStatus, todayKey, dateKey, startOfWeek, addDays } from "./utilities.js";
 
 const logsCol = (familyId) => collection(db, "families", familyId, "activityLogs");
 
@@ -71,14 +71,14 @@ export function dailyReport(tasks, dateKey = todayKey()) {
 }
 
 export function weeklyReport(tasks, weekStart = startOfWeek()) {
-  const from = weekStart.toISOString().slice(0, 10);
-  const to = addDays(weekStart, 6).toISOString().slice(0, 10);
+  const from = dateKey(weekStart);
+  const to = dateKey(addDays(weekStart, 6));
   return buildReport(tasks, { dateFrom: from, dateTo: to });
 }
 
 export function monthlyReport(tasks, year, month) {
-  const from = new Date(year, month, 1).toISOString().slice(0, 10);
-  const to = new Date(year, month + 1, 0).toISOString().slice(0, 10);
+  const from = dateKey(new Date(year, month, 1));
+  const to = dateKey(new Date(year, month + 1, 0));
   return buildReport(tasks, { dateFrom: from, dateTo: to });
 }
 

@@ -15,7 +15,7 @@ import {
   serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 import { db } from "./firebase-config.js";
-import { el, confirmAction } from "./utilities.js";
+import { el, confirmAction, todayKey } from "./utilities.js";
 import { logActivity } from "./reports.js";
 
 const goalsCol = (familyId) => collection(db, "families", familyId, "goals");
@@ -38,7 +38,7 @@ export async function createGoal(familyId, session, input) {
     title: input.title.trim(),
     description: input.description?.trim() || "",
     category: input.category || "Personal Development",
-    startDate: input.startDate || new Date().toISOString().slice(0, 10),
+    startDate: input.startDate || todayKey(),
     targetDate: input.targetDate || null,
     progress: 0,
     status: "not-started", // not-started | in-progress | completed | cancelled

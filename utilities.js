@@ -117,10 +117,24 @@ export function debounce(fn, wait = 300) {
 }
 
 // ---- Date / time helpers ---------------------------------------------------
-export function todayKey(date = new Date()) {
+// dateKey() is the ONE place a Date object is turned into a "YYYY-MM-DD"
+// string. It deliberately uses the LOCAL calendar fields (getFullYear /
+// getMonth / getDate), never toISOString(), because toISOString() always
+// converts to UTC first — for anyone in a timezone ahead of UTC (Lagos and
+// effectively all of Africa, Europe, Asia and Australia), local midnight is
+// still "yesterday" in UTC, so every date in the app would silently shift
+// back one day. All task/goal/habit dates and the daily/weekly/monthly
+// planners rely on this being calendar-correct in the user's own timezone.
+export function dateKey(date) {
   const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  return d.toISOString().slice(0, 10); // YYYY-MM-DD
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+export function todayKey(date = new Date()) {
+  return dateKey(date);
 }
 
 export function formatFriendlyDate(dateKey) {
@@ -219,7 +233,7 @@ export function generateId(prefix = "id") {
 // ---- Simple confirm dialog (Section 44) -----------------------------------
 export function confirmAction({ title, message, confirmLabel = "Delete", cancelLabel = "Cancel" }) {
   return new Promise((resolve) => {
-    const overlay = el("div", { class: "modal-overlay" });
+    const overlay = el("div", { class: "modal-overlay modal-overlay--visible" });
     const box = el("div", { class: "modal modal--confirm", role: "alertdialog", "aria-modal": "true" }, [
       el("h3", {}, title),
       el("p", {}, message),

@@ -40,6 +40,8 @@ settings.js                  Theme, palette, categories, points toggle
 dashboard.js                Main controller wiring every view together
 utilities.js                Shared helpers (dates, formatting, toasts, dialogs,
                             SHA-256 hashing + secure key generation)
+email-config.js              EmailJS credentials (fill in once — see §15)
+email-reminders.js            Task-added / upcoming / completed / overdue email logic
 
 manifest.json               Web App Manifest — installable on iPhone/Android/desktop
 service-worker.js            App-shell caching + offline fallback
@@ -396,3 +398,130 @@ extra hardening is worth adding a payment method for:
 Until and unless you do that, the app works exactly as described in
 sections 1–13 above, at $0/month, with no billing account anywhere in the
 picture.
+
+---
+
+## 15. Free Gmail email reminders
+
+The app can now email the family automatically when a task is added, when
+one is about to start, when it's completed, and if it goes overdue — using
+[EmailJS](https://www.emailjs.com), a free, client-side email service that
+can send through a personal Gmail account. No backend, no Blaze plan, no
+cost for normal family volumes (free tier: 200 emails/month).
+
+**Be aware of one honest limit up front:** since this runs entirely in the
+browser — matching the rest of this app's Cloud-Functions-free design (see
+§14) — the "upcoming" and "overdue" checks only run while some device
+actually has the dashboard open (the installed PWA counts). "Task added"
+and "task completed" emails are fully reliable regardless, since they fire
+at the exact moment those actions happen in an already-open app. If you
+later want guaranteed delivery with nobody's app open, that requires a
+scheduled Cloud Function — the same optional Blaze upgrade path described
+in §14.
+
+### One-time setup (free, ~10 minutes)
+
+1. **Create a free EmailJS account** at https://www.emailjs.com.
+2. **Connect Gmail as an Email Service**: Email Services → Add New Service
+   → Gmail → follow the OAuth prompt to connect your Gmail account. Note
+   the **Service ID** it generates.
+3. **Create one Email Template** (Email Templates → Create New Template).
+   Set the **To email** field to `{{to_email}}`, and use a subject and body
+   like:
+
+   **Subject:**
+   ```
+   Family Productivity Hub: {{event_type}} — {{task_title}}
+   ```
+
+   **Content:**
+   ```
+   Hi {{to_name}},
+
+   {{event_message}}
+
+   Task: {{task_title}}
+   Date: {{task_date}}
+   Time: {{task_time}}
+
+   — {{family_name}}
+   ```
+
+   Save it and note the **Template ID**.
+4. **Get your Public Key**: Account → General → **Public Key**.
+5. Paste all three into **`email-config.js`**:
+   ```js
+   export const EMAILJS_PUBLIC_KEY = "...";
+   export const EMAILJS_SERVICE_ID = "...";
+   export const EMAILJS_TEMPLATE_ID = "...";
+   ```
+6. Deploy (or just refresh, if testing locally). In the app, go to
+   **Settings → Email Reminders**, turn it on, enter the notification email
+   (typically the parent's Gmail), and set how many minutes before a task
+   starts you want the reminder.
+
+That's the entire setup — everything else (sending, dedup so you're not
+emailed twice for the same reminder, the periodic check) is already wired
+up in `email-reminders.js`.
+
+### Per-child email addresses (optional)
+
+If a family member has their own email on file (set via **+ Add Family
+Member** → Email, or when editing them), their task emails go to *their*
+address instead of the shared notification address — useful for an older
+child who checks their own inbox. Leave it blank to fall back to the
+family's shared notification email.
+
+---
+
+## 16. Deleting a family member's information
+
+A parent/admin can now permanently delete a child's (or any member's)
+profile: open **Family** (or the family-progress grid on the Dashboard) →
+**Manage** on that person → **Delete Permanently**, in the confirmation
+that follows.
+
+What happens: the member's own profile document is deleted outright. Their
+existing tasks, goals, and habits are archived (removed from active views)
+rather than destroyed outright, so historical reports and the activity log
+stay intact — only the member's personal profile itself is truly and
+permanently removed. A softer **Deactivate** option is also available in
+the same dialog if you'd rather just hide them from active use without
+deleting anything.
+
+For safety, a parent cannot deactivate or delete their own account from
+this dialog (to avoid ever leaving a family with no admin) — the two
+buttons simply don't appear when editing your own profile.
+
+**Known limitation:** once deactivated (not deleted), a member currently
+has no "reactivate" button in the UI — the member list only shows active
+members. Reactivating one today means editing that document directly in
+the Firebase Console (Firestore → families/{familyId}/members/{memberId} →
+set `active` back to `true`). Adding a proper "inactive members" view with
+a reactivate button would be a natural next enhancement if you need it
+regularly.
+
+---
+
+## 17. Bug-fix changelog
+
+A thorough pass was made through the entire codebase looking for anything
+that was silently broken. Everything below was found and fixed; nothing
+else in the app was changed alongside these fixes.
+
+| # | Bug | Impact | Fix |
+|---|---|---|---|
+| 1 | `todayKey()` combined `setHours(0,0,0,0)` (local midnight) with `toISOString()` (which converts to UTC first) | For **every timezone ahead of UTC** — Lagos and effectively all of Africa, Europe, Asia, and Australia — "today," new-task defaults, the daily planner, and overdue detection were all silently off by one day | Added a timezone-safe `dateKey()` helper (uses local calendar fields directly, never converts to UTC) and routed every date-to-string conversion in the app through it |
+| 2 | `confirmAction()`'s dialog element never received the `modal-overlay--visible` CSS class | Every confirmation dialog (delete task, delete goal, delete habit, deactivate member) was invisible — clicking Delete appeared to do nothing, forever | Added the visible class when the dialog is built |
+| 3 | Clicking "Manage" on an existing family member and hitting Save always called `createMember` | Editing a member's name/age/email **created a duplicate member** instead of updating the original; `updateMember` and `deactivateMember` were both imported but never actually called anywhere | The member modal now tracks which member (if any) is being edited and calls the correct function |
+| 4 | `deactivateMember()` called `confirmAction()` without importing it | Would have thrown `ReferenceError: confirmAction is not defined` the instant it was used — invisible until now only because it was never wired to a button | Added the missing import |
+| 5 | Editing a task always submitted `recurring: "none"` | Editing any field (e.g. priority) on an existing recurring task instance silently wiped its recurrence metadata | Edits no longer touch `recurring` at all (it's a create-time-only concept here); the dropdown is disabled and shown correctly when editing |
+| 6 | Editing a task's start/end time never recomputed `duration` | Cards and reports kept showing the *original* duration forever after a time edit | `updateTask()` now recomputes `duration` whenever a full field edit is submitted |
+| 7 | If a parent declined to proceed past a schedule-conflict warning, the app still showed "Task created successfully" and closed the modal | Misleading — no task was actually saved, but nothing told the parent that | The create handler now checks `createTask`'s return value and reports "Task not saved" when it's `null` |
+| 8 | The Reports view's Export CSV / Print buttons re-attached a click listener every time that view re-rendered (which happens on almost every state change) | After a few renders, one click could trigger several simultaneous CSV downloads or print dialogs | Moved to one-time wiring (`wireReportsActions()`, called once at startup) instead of re-binding on every render |
+| 9 | The Weekly planner's task toggle/delete had no error handling | A failed action (permission or network error) failed silently there, while the same action showed a friendly error everywhere else | Added the same `.catch()` + toast used by every other task list |
+| 10 | `findConflict()` opened a realtime `onSnapshot` listener just to read data once, unsubscribing inside its own callback | Worked, but was an unnecessary listener for a one-time check | Switched to `getDocs()`, the correct one-time-read API |
+
+None of these required changing what any feature is *supposed* to do —
+each one is a restoration of the behavior the app already documented
+elsewhere (in this README, in code comments, or in the UI itself).

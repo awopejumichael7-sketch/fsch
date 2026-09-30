@@ -27,15 +27,17 @@ import {
   addDoc,
   setDoc,
   updateDoc,
+  getDocs,
   onSnapshot,
   query,
   where,
   orderBy,
   serverTimestamp,
   Timestamp,
+  writeBatch,
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 import { db } from "./firebase-config.js";
-import { el, generateReadableKey, sha256Hex, maskKeyDisplay } from "./utilities.js";
+import { el, confirmAction, generateReadableKey, sha256Hex, maskKeyDisplay } from "./utilities.js";
 import { logActivity } from "./reports.js";
 
 // ---- Firestore paths --------------------------------------------------
@@ -90,6 +92,47 @@ export async function deactivateMember(familyId, session, memberId, memberName) 
     updatedBy: session.uid,
   });
   await logActivity(familyId, session, `Deactivated family member "${memberName}"`);
+  return true;
+}
+
+// Permanently removes a family member's profile (the feature requested:
+// "allow parent to delete a child's information"). Their existing tasks,
+// goals, and habits are archived — not hard-deleted — so historical
+// records/reports aren't silently destroyed, matching how the rest of the
+// app treats deletion (Section 10/44); only the member's own profile is
+// truly and permanently removed.
+export async function deleteMemberPermanently(familyId, session, member) {
+  if (member.uid === session.uid) {
+    throw new Error("You can't delete your own account from here.");
+  }
+
+  const ok = await confirmAction({
+    title: "Permanently delete this family member?",
+    message: `This permanently removes ${member.name}'s profile and cannot be undone. Their existing tasks, goals, and habits will be archived for historical records but will no longer be assigned to an active member.`,
+    confirmLabel: "Delete Permanently",
+  });
+  if (!ok) return false;
+
+  const [taskSnap, goalSnap, habitSnap] = await Promise.all([
+    getDocs(query(collection(db, "families", familyId, "tasks"), where("assignedTo", "==", member.id))),
+    getDocs(query(collection(db, "families", familyId, "goals"), where("assignedTo", "==", member.id))),
+    getDocs(query(collection(db, "families", familyId, "habits"), where("assignedTo", "==", member.id))),
+  ]);
+
+  // NOTE: a single Firestore batch supports at most 500 writes. In the
+  // ordinary lifetime of a family member (tasks + goals + habits) this is
+  // very unlikely to be reached; if it ever is, Firestore rejects the
+  // whole batch atomically (nothing is partially archived/deleted) and the
+  // parent sees a clear error toast rather than a partial or corrupted
+  // deletion.
+  const batch = writeBatch(db);
+  taskSnap.forEach((d) => batch.update(d.ref, { archived: true, updatedAt: serverTimestamp() }));
+  goalSnap.forEach((d) => batch.update(d.ref, { archived: true, updatedAt: serverTimestamp() }));
+  habitSnap.forEach((d) => batch.update(d.ref, { archived: true, updatedAt: serverTimestamp() }));
+  batch.delete(doc(db, "families", familyId, "members", member.id));
+  await batch.commit();
+
+  await logActivity(familyId, session, `Permanently deleted family member "${member.name}"`);
   return true;
 }
 

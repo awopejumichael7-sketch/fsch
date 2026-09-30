@@ -19,6 +19,7 @@ import {
   updateDoc,
   deleteDoc,
   onSnapshot,
+  getDocs,
   query,
   where,
   orderBy,
@@ -36,6 +37,7 @@ import {
   computeStatus,
   STATUS_LABELS,
   todayKey,
+  dateKey,
   addDays,
   startOfWeek,
   escapeHTML,
@@ -138,7 +140,7 @@ async function createRecurringSeries(familyId, session, baseTask) {
       const ref = doc(tasksCol(familyId));
       batch.set(ref, {
         ...baseTask,
-        date: cursor.toISOString().slice(0, 10),
+        date: dateKey(cursor),
         seriesId,
         completed: false,
         status: "not-started",
@@ -155,9 +157,21 @@ async function createRecurringSeries(familyId, session, baseTask) {
 }
 
 // ---- UPDATE / COMPLETE ------------------------------------------------------
+// Called only from the "edit task" modal, which always submits the full set
+// of editable fields, so it's safe to validate and recompute derived fields
+// the same way creation does (Section 43: don't allow a saved edit to leave
+// invalid or stale data behind).
 export async function updateTask(familyId, session, taskId, updates) {
+  const payload = { ...updates };
+  if (payload.title !== undefined && payload.startTime && payload.endTime) {
+    validateTaskInput(payload);
+    // BUG FIX: editing a task's start/end time never recomputed `duration`,
+    // so the daily/weekly cards and reports kept showing the ORIGINAL
+    // duration forever after an edit.
+    payload.duration = minutesBetween(payload.startTime, payload.endTime);
+  }
   await updateDoc(doc(db, "families", familyId, "tasks", taskId), {
-    ...updates,
+    ...payload,
     updatedAt: serverTimestamp(),
     updatedBy: session.uid,
   });
@@ -219,27 +233,23 @@ function validateTaskInput(input) {
 // Client-side check for instant UX feedback; the authoritative guard lives
 // in Cloud Functions if you extend this app with server-side validation.
 async function findConflict(familyId, task) {
-  return new Promise((resolve) => {
-    const q = query(
-      tasksCol(familyId),
-      where("assignedTo", "==", task.assignedTo),
-      where("date", "==", task.date),
-      where("archived", "==", false)
-    );
-    const unsub = onSnapshot(q, (snap) => {
-      unsub();
-      const newStart = timeToMinutes(task.startTime);
-      const newEnd = timeToMinutes(task.endTime);
-      const hit = snap.docs
-        .map((d) => ({ id: d.id, ...d.data() }))
-        .find((existing) => {
-          const s = timeToMinutes(existing.startTime);
-          const e = timeToMinutes(existing.endTime);
-          return newStart < e && s < newEnd;
-        });
-      resolve(hit || null);
+  const q = query(
+    tasksCol(familyId),
+    where("assignedTo", "==", task.assignedTo),
+    where("date", "==", task.date),
+    where("archived", "==", false)
+  );
+  const snap = await getDocs(q);
+  const newStart = timeToMinutes(task.startTime);
+  const newEnd = timeToMinutes(task.endTime);
+  const hit = snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .find((existing) => {
+      const s = timeToMinutes(existing.startTime);
+      const e = timeToMinutes(existing.endTime);
+      return newStart < e && s < newEnd;
     });
-  });
+  return hit || null;
 }
 
 function timeToMinutes(hhmm) {
@@ -275,7 +285,7 @@ export function tasksForWeek(tasks, weekStartDate) {
   const days = [];
   for (let i = 0; i < 7; i += 1) {
     const day = addDays(weekStartDate, i);
-    const key = day.toISOString().slice(0, 10);
+    const key = dateKey(day);
     days.push({ dateKey: key, date: day, tasks: tasksForDay(tasks, key) });
   }
   return days;
