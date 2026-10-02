@@ -137,6 +137,7 @@ input:focus, select:focus, textarea:focus, button:focus-visible {
 
 .inline-form { display: flex; align-items: flex-end; gap: 0.8rem; flex-wrap: wrap; margin-bottom: 1rem; }
 .inline-form label { margin-bottom: 0; }
+.range-form { padding: 0.7rem 0.9rem; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
 
 /* ---- Auth pages ----------------------------------------------------------- */
 .auth-body { background: var(--color-navy); }

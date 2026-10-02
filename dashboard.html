@@ -137,6 +137,7 @@
         </div>
         <button id="daily-next" class="icon-btn">→</button>
         <button id="daily-today" class="btn btn--ghost btn--sm">Today</button>
+        <button id="daily-add-bulk-btn" class="btn btn--outline btn--sm">+ Add Multiple Tasks</button>
       </div>
       <div id="daily-task-list" class="task-list"></div>
     </section>
@@ -151,7 +152,14 @@
         </div>
         <button id="weekly-next" class="icon-btn">→</button>
         <button id="weekly-current" class="btn btn--ghost btn--sm">This Week</button>
+        <button id="weekly-add-bulk-btn" class="btn btn--outline btn--sm">+ Add Multiple Tasks</button>
       </div>
+      <form id="weekly-range-form" class="inline-form range-form">
+        <label>Start Date <input type="date" name="rangeStart" /></label>
+        <label>End Date <input type="date" name="rangeEnd" /></label>
+        <button type="submit" class="btn btn--outline btn--sm">Apply Range</button>
+        <button type="button" id="weekly-range-reset" class="btn btn--ghost btn--sm">Reset to This Week</button>
+      </form>
       <div id="weekly-grid" class="weekly-grid"></div>
     </section>
 
@@ -161,11 +169,21 @@
         <button id="monthly-prev" class="icon-btn">←</button>
         <h2 id="monthly-label"></h2>
         <button id="monthly-next" class="icon-btn">→</button>
+        <button id="monthly-add-bulk-btn" class="btn btn--outline btn--sm">+ Add Multiple Tasks</button>
       </div>
-      <div class="monthly-weekdays">
-        <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
+      <form id="monthly-range-form" class="inline-form range-form">
+        <label>Start Date <input type="date" name="rangeStart" /></label>
+        <label>End Date <input type="date" name="rangeEnd" /></label>
+        <button type="submit" class="btn btn--outline btn--sm">Apply Range</button>
+        <button type="button" id="monthly-range-reset" class="btn btn--ghost btn--sm">Reset to Calendar View</button>
+      </form>
+      <div id="monthly-calendar-wrap">
+        <div class="monthly-weekdays">
+          <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
+        </div>
+        <div id="monthly-grid" class="monthly-grid"></div>
       </div>
-      <div id="monthly-grid" class="monthly-grid"></div>
+      <div id="monthly-range-grid" class="weekly-grid" style="display:none;"></div>
     </section>
 
     <!-- ============ GOALS (Section 24) ============ -->
@@ -298,6 +316,11 @@
           closed. "Task added" and "task completed" emails are sent
           immediately and don't depend on the periodic check.
         </p>
+      </div>
+
+      <div class="panel">
+        <h3>Legal</h3>
+        <p><a href="privacy.html" target="_blank" rel="noopener">Privacy Policy</a></p>
       </div>
     </section>
 

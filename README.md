@@ -60,7 +60,15 @@ firebase.json                 Hosting + Firestore deployment config
 .firebaserc                    Firebase project alias (edit with your project ID)
 .gitignore                     Keeps node_modules/, local Firebase cache, and secrets out of Git
 
-.github/workflows/            GitHub Actions — automatic deploy on push (see §12)
+privacy.html                   Privacy Policy page (see §22)
+
+package.json                   devDependencies + scripts for running tests (see §19) —
+                              never deployed to Hosting
+tests/utilities.test.mjs        Unit tests (Node's built-in test runner, zero extra installs)
+tests/firestore.rules.test.mjs    Security Rules tests, run against the free Firestore Emulator
+
+.github/workflows/            GitHub Actions — automatic deploy on push (see §12) and
+                              test runs on every push/PR (see §19)
 
 functions-index.js            OPTIONAL, not deployed by default — legacy/upgrade-path
 functions-package.json         Cloud Functions, kept only for anyone who later switches
@@ -525,3 +533,157 @@ else in the app was changed alongside these fixes.
 None of these required changing what any feature is *supposed* to do —
 each one is a restoration of the behavior the app already documented
 elsewhere (in this README, in code comments, or in the UI itself).
+
+---
+
+## 18. Adding several tasks at once, and custom date ranges
+
+Two additions on top of everything above, both free and requiring no
+Cloud Functions or Blaze plan:
+
+**Add Multiple Tasks, from anywhere you plan.** The bulk-add modal (title,
+assignee, date, times, category, priority per row, with "+ Add Another
+Task") now has an entry point on the Dashboard *and* on the Daily, Weekly,
+and Monthly planner headers — so a parent can jump straight into adding a
+whole day's or week's tasks without leaving whichever view they're already
+looking at. Every row still goes through the exact same `createTask()`
+used for a single task, so validation and schedule-conflict warnings work
+identically either way.
+
+**Custom date ranges for the Weekly and Monthly planners.** Both planners
+keep their original Previous/Next/"This Week" and calendar-month
+navigation exactly as before — that's still the default. Alongside it,
+each now has a **Start Date** / **End Date** picker: choose any range (up
+to 90 days) and both planners render it as a horizontally-scrollable row
+of day cards, so you're no longer limited to a fixed Monday–Sunday week or
+a single calendar month. "Reset to This Week" / "Reset to Calendar View"
+— or simply using Previous/Next again — returns to the standard view.
+
+---
+
+## 19. Testing
+
+A real, runnable test suite now exists under `tests/`. Both suites are free
+to run — no paid service, no Blaze plan.
+
+```bash
+npm install        # one-time; installs devDependencies only (see package.json)
+npm run test:unit  # tests/utilities.test.mjs — dates, formatting, crypto helpers
+npm run test:rules # tests/firestore.rules.test.mjs — runs against the free Firestore Emulator
+npm test           # both, in sequence
+```
+
+**`tests/utilities.test.mjs`** uses Node's own built-in test runner
+(`node:test`) — no test framework to install. It specifically regression-
+tests the timezone bug from section 17 (`dateKey()` must never shift to a
+different calendar day, in any timezone), plus `startOfWeek()`,
+`formatTime()`, `minutesBetween()`, the status/overdue logic, and the
+access-key crypto helpers (`sha256Hex()`, `generateReadableKey()`,
+`maskKeyDisplay()`). Every assertion in it has been run and verified to
+pass against this exact codebase.
+
+**`tests/firestore.rules.test.mjs`** uses `@firebase/rules-unit-testing`
+against the local Firestore Emulator (`npm run test:rules` starts and
+stops the emulator for you automatically). It covers the three properties
+the whole Cloud-Functions-free security model depends on (section 14):
+family data isolation, `users/{uid}` role-assignment being create-once and
+never updatable, and access-key redemption only ever moving `usageCount`
+forward by exactly 1 and never past `maxUses`. This is a representative,
+high-value subset of `firestore.rules`, not exhaustive coverage — extend it
+alongside any future change to those areas.
+
+**CI:** `.github/workflows/run-tests.yml` runs both suites on every push
+and pull request. It's intentionally a separate, parallel check rather
+than a hard gate wired into the existing deploy workflows (so as not to
+modify those files) — if you want a merge to `main` blocked until tests
+pass, add a GitHub branch protection rule requiring the "Run Tests" check,
+from your repo's Settings → Branches (no workflow file changes needed).
+
+---
+
+## 20. Observability and App Check
+
+Three more free Firebase features, all guarded so the app behaves exactly
+as it does today if you leave them unconfigured — nothing breaks either
+way.
+
+**Analytics + Performance Monitoring** (`firebase-config.js`): free on
+every Firebase plan, including Spark. Performance Monitoring needs no
+setup beyond your existing config. Analytics only activates if you add a
+real `measurementId` (Project settings → General → "Your apps" — only
+present if you enabled Google Analytics for the project) in place of the
+`YOUR_MEASUREMENT_ID` placeholder; otherwise it silently does nothing.
+
+**App Check** (`firebase-config.js`): confirms that requests reaching
+Firestore are genuinely coming from this deployed app, not a script
+calling the Firestore REST API directly from outside it. Also free — the
+reCAPTCHA v3 provider has no paid tier. To enable:
+
+1. Register a site key at https://www.google.com/recaptcha/admin,
+   choosing **reCAPTCHA v3**.
+2. Firebase Console → **App Check** → register your web app → choose the
+   **reCAPTCHA v3** provider → paste the same site key.
+3. Paste that site key into `firebase-config.js`, replacing
+   `YOUR_RECAPTCHA_V3_SITE_KEY`.
+4. In Firebase Console → App Check → Firestore, you can optionally switch
+   enforcement from "Monitor" to "Enforce" once you've confirmed the app
+   still works normally with App Check active.
+
+Left as the placeholder, App Check simply isn't active — every feature in
+this app works exactly as it did before this section existed.
+
+---
+
+## 21. Security headers (Content-Security-Policy)
+
+`firebase.json` now sends a real `Content-Security-Policy` header, plus
+`X-Content-Type-Options` and `Referrer-Policy`, on every response — free,
+since these are just HTTP headers Firebase Hosting serves for you. The
+policy only allows scripts from this app's own origin, Google's Firebase
+CDN, the EmailJS CDN, and Google's reCAPTCHA (for App Check); everything
+else is blocked by default.
+
+One deliberate, documented trade-off: `style-src` includes `'unsafe-inline'`
+because a couple of existing, working features (the goal progress bar,
+the custom date-range day grid) set inline `style` values directly. This
+is a common, pragmatic choice — the primary XSS protection CSP provides
+comes from restricting `script-src`, which remains strict with no
+`'unsafe-inline'` or `'unsafe-eval'`.
+
+---
+
+## 22. Privacy Policy and accessibility
+
+A **`privacy.html`** page was added — plain-language, and accurate to
+exactly what this specific app collects (it's written for a self-hosted,
+one-family deployment, not a multi-tenant product; see section 7's note
+on that architectural fork if that ever changes). It's linked from the
+sign-up page, the sign-in page, and the dashboard's Settings view.
+
+**Modal focus-trapping** (`utilities.js`'s new `trapFocus()`, wired into
+every modal in `dashboard.js` plus `confirmAction()`'s own dialog): keyboard
+and screen-reader users can no longer Tab out of an open modal into the
+page behind it, Escape now closes any modal the same way Cancel does, and
+focus correctly returns to whatever triggered the modal once it closes —
+the standard WAI-ARIA dialog pattern.
+
+---
+
+## 23. What's intentionally still on the roadmap
+
+In the interest of landing a focused, well-tested slice rather than a
+sprawling, harder-to-verify one, this pass did not include two items from
+the original suggestions list:
+
+- **Bounding the live Firestore listeners to a rolling date window.**
+  `watchTasks`/`watchGoals`/`watchHabits` still load every non-archived
+  record. This is genuinely fine at today's scale and remains free either
+  way, but is worth a focused pass of its own once a family's history
+  grows large, since it touches the core data-loading path in several
+  files at once.
+- **Recurring-series management** ("this occurrence / this and future /
+  entire series"), **undo toasts**, and **drag-to-reschedule** — all still
+  valid ideas from section's earlier review, not yet built.
+
+Happy to take on any of these next, the same way: carefully, with tests
+where it matters, and without disturbing what already works.

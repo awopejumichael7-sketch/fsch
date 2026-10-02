@@ -58,6 +58,7 @@ import {
   addDays,
   DEFAULT_CATEGORIES,
   computeStatus,
+  trapFocus,
 } from "./utilities.js";
 
 initTheme();
@@ -73,8 +74,15 @@ let state = {
   currentDay: todayKey(),
   currentWeekStart: startOfWeek(),
   currentMonth: new Date(),
+  weeklyRange: null, // { from: "YYYY-MM-DD", to: "YYYY-MM-DD" } when a custom range is active
+  monthlyRange: null, // same shape, for the monthly planner's custom range mode
   filters: { memberId: "all", category: "all", priority: "all", status: "all", searchTerm: "" },
 };
+
+// A custom date range on either planner is capped at 90 days (~3 months) so
+// the view stays a usable, reasonably fast scrollable row of day cards
+// rather than rendering an unbounded number of columns.
+const MAX_CUSTOM_RANGE_DAYS = 90;
 
 protectPage({
   onReady: (session) => {
@@ -269,6 +277,10 @@ function shiftDay(delta) {
 
 // ---- Weekly planner (Section 13) --------------------------------------------
 function renderWeeklyView() {
+  if (state.weeklyRange) {
+    renderWeeklyCustomRange();
+    return;
+  }
   const days = tasksForWeek(getVisibleTasks(), state.currentWeekStart);
   const container = $("#weekly-grid");
   if (!container) return;
@@ -292,12 +304,96 @@ function renderWeeklyView() {
     container.appendChild(col);
   });
 }
-$("#weekly-prev")?.addEventListener("click", () => { state.currentWeekStart = addDays(state.currentWeekStart, -7); renderWeeklyView(); });
-$("#weekly-next")?.addEventListener("click", () => { state.currentWeekStart = addDays(state.currentWeekStart, 7); renderWeeklyView(); });
-$("#weekly-current")?.addEventListener("click", () => { state.currentWeekStart = startOfWeek(); renderWeeklyView(); });
+$("#weekly-prev")?.addEventListener("click", () => { state.weeklyRange = null; state.currentWeekStart = addDays(state.currentWeekStart, -7); renderWeeklyView(); });
+$("#weekly-next")?.addEventListener("click", () => { state.weeklyRange = null; state.currentWeekStart = addDays(state.currentWeekStart, 7); renderWeeklyView(); });
+$("#weekly-current")?.addEventListener("click", () => { state.weeklyRange = null; state.currentWeekStart = startOfWeek(); renderWeeklyView(); });
+
+// ---- Weekly planner: custom Start Date / End Date range (additive) --------
+// Renders as a separate function, entirely independent of the standard
+// week rendering above, so the default Mon–Sun behavior is never touched.
+function daysBetweenInclusive(fromKey, toKey) {
+  const from = new Date(`${fromKey}T00:00:00`);
+  const to = new Date(`${toKey}T00:00:00`);
+  return Math.round((to - from) / 86400000) + 1;
+}
+
+function buildCustomRangeDays(tasks, fromKey, toKey) {
+  const days = [];
+  let cursor = new Date(`${fromKey}T00:00:00`);
+  const end = new Date(`${toKey}T00:00:00`);
+  while (cursor <= end) {
+    const key = dateKey(cursor);
+    days.push({ dateKey: key, tasks: tasksForDay(tasks, key) });
+    cursor = addDays(cursor, 1);
+  }
+  return days;
+}
+
+// Shared by both planners' custom-range mode. Mirrors the day-column markup
+// used by the standard weekly view above, but kept as its own function so
+// that existing view's code is never modified.
+function renderDayColumnsInto(container, days) {
+  container.innerHTML = "";
+  container.style.gridTemplateColumns = `repeat(${Math.max(days.length, 1)}, minmax(150px, 1fr))`;
+  days.forEach(({ dateKey: key, tasks }) => {
+    const col = el("div", { class: "weekly-day-col" }, [
+      el("h4", {}, new Date(`${key}T00:00:00`).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })),
+    ]);
+    tasks.forEach((t) =>
+      col.appendChild(
+        renderTaskCard(t, state.members, {
+          session: state.session,
+          onToggle: handleToggleTask,
+          onEdit: openTaskModal,
+          onDelete: (task) => deleteTask(state.session.familyId, state.session, task).catch((e) => showToast(friendlyError(e), "error")),
+        })
+      )
+    );
+    if (!tasks.length) col.appendChild(el("p", { class: "empty-state empty-state--sm" }, "No tasks"));
+    container.appendChild(col);
+  });
+}
+
+function renderWeeklyCustomRange() {
+  const container = $("#weekly-grid");
+  if (!container) return;
+  const { from, to } = state.weeklyRange;
+  const days = buildCustomRangeDays(getVisibleTasks(), from, to);
+  const label = $("#weekly-range-label");
+  if (label) label.textContent = `Custom range: ${formatFriendlyDate(from)} – ${formatFriendlyDate(to)}`;
+  renderDayColumnsInto(container, days);
+}
+
+$("#weekly-range-form")?.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const from = form.rangeStart.value;
+  const to = form.rangeEnd.value;
+  if (!from || !to) return showToast("Please choose both a start and end date.", "info");
+  if (to < from) return showToast("End date must be on or after the start date.", "info");
+  if (daysBetweenInclusive(from, to) > MAX_CUSTOM_RANGE_DAYS) {
+    return showToast(`Please choose a range of ${MAX_CUSTOM_RANGE_DAYS} days or less.`, "info");
+  }
+  state.weeklyRange = { from, to };
+  renderWeeklyView();
+});
+$("#weekly-range-reset")?.addEventListener("click", () => {
+  state.weeklyRange = null;
+  $("#weekly-range-form")?.reset();
+  renderWeeklyView();
+});
 
 // ---- Monthly planner (Section 14) -------------------------------------------
 function renderMonthlyView() {
+  if (state.monthlyRange) {
+    renderMonthlyCustomRange();
+    return;
+  }
+  const calendarWrap = $("#monthly-calendar-wrap");
+  const rangeGrid = $("#monthly-range-grid");
+  if (calendarWrap) calendarWrap.style.display = "";
+  if (rangeGrid) rangeGrid.style.display = "none";
+
   const year = state.currentMonth.getFullYear();
   const month = state.currentMonth.getMonth();
   const map = tasksForMonth(getVisibleTasks(), year, month);
@@ -325,8 +421,44 @@ function renderMonthlyView() {
     grid.appendChild(cell);
   }
 }
-$("#monthly-prev")?.addEventListener("click", () => { state.currentMonth = new Date(state.currentMonth.getFullYear(), state.currentMonth.getMonth() - 1, 1); renderMonthlyView(); });
-$("#monthly-next")?.addEventListener("click", () => { state.currentMonth = new Date(state.currentMonth.getFullYear(), state.currentMonth.getMonth() + 1, 1); renderMonthlyView(); });
+$("#monthly-prev")?.addEventListener("click", () => { state.monthlyRange = null; state.currentMonth = new Date(state.currentMonth.getFullYear(), state.currentMonth.getMonth() - 1, 1); renderMonthlyView(); });
+$("#monthly-next")?.addEventListener("click", () => { state.monthlyRange = null; state.currentMonth = new Date(state.currentMonth.getFullYear(), state.currentMonth.getMonth() + 1, 1); renderMonthlyView(); });
+
+// ---- Monthly planner: custom Start Date / End Date range (additive) -------
+// Reuses the same day-column renderer as the weekly planner's custom range,
+// writing into its own #monthly-range-grid container while the calendar
+// grid above is simply hidden (never modified) for the duration.
+function renderMonthlyCustomRange() {
+  const calendarWrap = $("#monthly-calendar-wrap");
+  const rangeGrid = $("#monthly-range-grid");
+  if (calendarWrap) calendarWrap.style.display = "none";
+  if (rangeGrid) rangeGrid.style.display = "";
+  if (!rangeGrid) return;
+  const { from, to } = state.monthlyRange;
+  const days = buildCustomRangeDays(getVisibleTasks(), from, to);
+  const label = $("#monthly-label");
+  if (label) label.textContent = `Custom range: ${formatFriendlyDate(from)} – ${formatFriendlyDate(to)}`;
+  renderDayColumnsInto(rangeGrid, days);
+}
+
+$("#monthly-range-form")?.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const from = form.rangeStart.value;
+  const to = form.rangeEnd.value;
+  if (!from || !to) return showToast("Please choose both a start and end date.", "info");
+  if (to < from) return showToast("End date must be on or after the start date.", "info");
+  if (daysBetweenInclusive(from, to) > MAX_CUSTOM_RANGE_DAYS) {
+    return showToast(`Please choose a range of ${MAX_CUSTOM_RANGE_DAYS} days or less.`, "info");
+  }
+  state.monthlyRange = { from, to };
+  renderMonthlyView();
+});
+$("#monthly-range-reset")?.addEventListener("click", () => {
+  state.monthlyRange = null;
+  $("#monthly-range-form")?.reset();
+  renderMonthlyView();
+});
 
 // ---- Goals view (Section 24) -------------------------------------------------
 function renderGoalsView() {
@@ -787,12 +919,29 @@ function resetBulkTaskModal() {
   container.appendChild(buildBulkTaskRow(2));
 }
 
+// Shared by every modal below: shows it and applies the focus trap
+// (Section 42 accessibility) so keyboard/screen-reader users can't tab out
+// into the page behind it, and Escape closes it the same way Cancel does.
+let activeFocusTrapRelease = null;
+function activateModal(modal, closeSelector) {
+  if (!modal) return;
+  modal.classList.add("modal-overlay--visible");
+  if (activeFocusTrapRelease) activeFocusTrapRelease();
+  activeFocusTrapRelease = trapFocus(modal, () => closeModal(closeSelector));
+}
+
 function openBulkTaskModal() {
   resetBulkTaskModal();
-  $("#bulk-task-modal")?.classList.add("modal-overlay--visible");
+  activateModal($("#bulk-task-modal"), "#bulk-task-modal");
 }
 
 function wireBulkAddTasks() {
+  // Same modal, same createTask() flow, just made reachable from every
+  // planner view instead of only the Dashboard's Quick Actions.
+  $("#daily-add-bulk-btn")?.addEventListener("click", () => openBulkTaskModal());
+  $("#weekly-add-bulk-btn")?.addEventListener("click", () => openBulkTaskModal());
+  $("#monthly-add-bulk-btn")?.addEventListener("click", () => openBulkTaskModal());
+
   $("#bulk-add-row-btn")?.addEventListener("click", () => {
     const container = $("#bulk-task-rows");
     if (!container) return;
@@ -884,10 +1033,10 @@ function openTaskModal(task = null) {
     form.date.value = state.currentDay || todayKey();
     form.recurring.disabled = false;
   }
-  modal.classList.add("modal-overlay--visible");
+  activateModal(modal, "#task-modal");
 }
-function openGoalModal() { $("#goal-modal").classList.add("modal-overlay--visible"); }
-function openHabitModal() { $("#habit-modal").classList.add("modal-overlay--visible"); }
+function openGoalModal() { activateModal($("#goal-modal"), "#goal-modal"); }
+function openHabitModal() { activateModal($("#habit-modal"), "#habit-modal"); }
 let editingMember = null;
 
 function openMemberModal(member = null) {
@@ -913,10 +1062,14 @@ function openMemberModal(member = null) {
     if (deactivateBtn) deactivateBtn.style.display = "none";
     if (deleteBtn) deleteBtn.style.display = "none";
   }
-  modal.classList.add("modal-overlay--visible");
+  activateModal(modal, "#member-modal");
 }
 function closeModal(selector) {
   $(selector)?.classList.remove("modal-overlay--visible");
+  if (activeFocusTrapRelease) {
+    activeFocusTrapRelease();
+    activeFocusTrapRelease = null;
+  }
 }
 
 // ---- Offline indicator (Section 38) --------------------------------------------
